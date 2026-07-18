@@ -214,7 +214,6 @@ def process_combat_collisions(p1, p2):
                     particles.append([p2.x + p2.w//2, p2.y + p2.h//2, random.uniform(-6, 6), random.uniform(-9, -2), p1.saber_color, 255, random.randint(3, 5)])
 
 def draw_cyber_background(surface):
-    # Sky Gradient glow
     for y in range(0, FLOOR_Y):
         color_val = max(10, 35 - int(y * 0.08))
         pygame.draw.line(surface, (16, 12, color_val), (0, y), (WIDTH, y))
@@ -227,17 +226,14 @@ def draw_cyber_background(surface):
         pygame.draw.rect(surface, (28, 26, 38), (s[0], s[1], s[2], s[3]), 1)
         pygame.draw.line(surface, (40, 50, 80), (s[0], s[1]), (s[0] + s[2], s[1]), 2)
 
-    # Foreground Grid Floor Projection
     pygame.draw.rect(surface, DARK_GRAY, (0, FLOOR_Y, WIDTH, HEIGHT - FLOOR_Y))
-    
-    # Perspective Grid Lines
+
     num_lines = 16
     for i in range(num_lines + 1):
         x_start = int((WIDTH / num_lines) * i)
         x_end = int((WIDTH / 2) + (x_start - WIDTH / 2) * 1.5)
         pygame.draw.line(surface, GRID_LINE_COLOR, (x_start, FLOOR_Y), (x_end, HEIGHT), 1)
 
-    # Horizontal scrolling line grid effects
     global bg_scroll
     if game_state != "paused":
         bg_scroll = (bg_scroll + 0.8) % 30
@@ -246,7 +242,6 @@ def draw_cyber_background(surface):
         pygame.draw.line(surface, GRID_LINE_COLOR, (0, curr_y), (WIDTH, curr_y), 1)
         curr_y += 25
 
-    # Glowing Horizon Separation Divider
     pygame.draw.line(surface, GOLD, (0, FLOOR_Y), (WIDTH, FLOOR_Y), 2)
 
 
@@ -263,7 +258,6 @@ def reset_match():
 reset_match()
 start_btn = pygame.Rect(WIDTH // 2 - 120, HEIGHT // 2 + 50, 240, 46)
 
-# Pause Menu Button Rectangles
 resume_btn = pygame.Rect(WIDTH // 2 - 120, HEIGHT // 2 - 60, 240, 42)
 restart_btn = pygame.Rect(WIDTH // 2 - 120, HEIGHT // 2 - 5, 240, 42)
 home_btn = pygame.Rect(WIDTH // 2 - 120, HEIGHT // 2 + 50, 240, 42)
@@ -330,7 +324,7 @@ while True:
                 reset_match()
                 game_state = "menu"
 
-    # ================= 1. START MENU SCREEN =================
+    # 1. START MENU SCREEN 
     if game_state == "menu":
         menu_mask = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
         menu_mask.fill((10, 8, 16, 180))
@@ -348,7 +342,7 @@ while True:
         btn_txt = font_sub.render("ENTER THE ARENA", True, WHITE)
         display_surface.blit(btn_txt, (start_btn.x + (start_btn.width//2 - btn_txt.get_width()//2), start_btn.y + (start_btn.height//2 - btn_txt.get_height()//2)))
 
-    # ================= 2. CLEAN CONQUEST INTRO SPLASH =================
+    #2. CLEAN CONQUEST INTRO SPLASH
     elif game_state == "level_intro":
         intro_mask = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
         intro_mask.fill((10, 8, 16, 120))
@@ -364,9 +358,8 @@ while True:
         if intro_timer <= 0:
             game_state = "fight"
 
-    # ================= 3. ACTIVE FIGHT SIMULATION LAYER =================
+    #3. ACTIVE FIGHT SIMULATION LAYER
     elif game_state in ["fight", "paused"]:
-        # Render static/frozen state frames of combat entities during active pause
         if game_state == "fight" and not game_over:
             keys = pygame.key.get_pressed()
             p1.update(keys, p2)
@@ -421,7 +414,7 @@ while True:
         vs_obj = font_main.render("VS", True, GOLD)
         display_surface.blit(vs_obj, (WIDTH // 2 - vs_obj.get_width() // 2, 32))
 
-        # ================= 4. DYNAMIC INTERACTIVE PAUSE OVERLAY =================
+        #4. DYNAMIC INTERACTIVE PAUSE OVERLAY
         if game_state == "paused":
             pause_mask = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
             pause_mask.fill((10, 8, 16, 200))
@@ -448,7 +441,7 @@ while True:
             t3 = font_sub.render("RETURN TO MAIN LOBBY", True, WHITE)
             display_surface.blit(t3, (home_btn.x + (home_btn.width//2 - t3.get_width()//2), home_btn.y + (home_btn.height//2 - t3.get_height()//2)))
 
-    # ================= 5. GAME OVER ROUND OVERLAY =================
+    #5. GAME OVER ROUND OVERLAY
     if game_over:
         overlay = pygame.Surface((WIDTH, HEIGHT))
         overlay.fill(BLACK)
