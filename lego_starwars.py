@@ -38,26 +38,70 @@ previous_state = "fight"
 intro_timer = 0      
 bg_scroll = 0.0
 
+# Name Input State Variables
+p1_name_input = ""
+p2_name_input = ""
+active_player_input = 1  # 1 for P1, 2 for P2
+
 particles = [] 
 hit_flashes = [] 
 
 stars = [(random.randint(0, WIDTH), random.randint(0, FLOOR_Y - 120), random.choice([1, 2])) for _ in range(60)]
+
+# NIGHT CITY BUILDINGS GENERATION WITH WINDOWS
+WINDOW_COLORS = [
+    (255, 230, 120),  # Warm yellow
+    (0, 220, 255),    # Cyber cyan
+    (255, 180, 80),   # Warm amber
+    (200, 220, 255),  # Soft blue/white
+    (40, 38, 55)      # Dark / Off window
+]
+
 skyscrapers = []
-for i in range(15):
-    w = random.randint(60, 120)
-    h = random.randint(100, 250)
-    x = i * 70 + random.randint(-20, 20)
+for i in range(16):
+    w = random.randint(70, 110)
+    h = random.randint(120, 270)
+    x = i * 60 + random.randint(-15, 15)
     y = FLOOR_Y - h
-    skyscrapers.append((x, y, w, h))
+    
+    windows = []
+    win_w, win_h = 4, 5
+    gap_x, gap_y = 6, 8
+    
+    start_x = x + 8
+    start_y = y + 12
+    
+    for wx in range(start_x, x + w - 10, win_w + gap_x):
+        for wy in range(start_y, y + h - 15, win_h + gap_y):
+            if random.random() < 0.35:
+                color = random.choice(WINDOW_COLORS[:-1])
+            else:
+                color = WINDOW_COLORS[-1]
+            windows.append((wx, wy, win_w, win_h, color))
+            
+    has_antenna = random.random() < 0.4
+    antenna_x = x + w // 2
+    
+    bg_shade = random.randint(18, 28)
+    building_color = (bg_shade, bg_shade + 2, bg_shade + 10)
+    
+    skyscrapers.append({
+        'rect': (x, y, w, h),
+        'windows': windows,
+        'has_antenna': has_antenna,
+        'antenna_x': antenna_x,
+        'color': building_color
+    })
 
 class Fighter:
-    def __init__(self, x, y, name, color, saber_color, controls):
+    def __init__(self, x, y, name, color, saber_color, controls, player_num=1):
         self.name = name
         self.color = color
         self.saber_color = saber_color
         self.controls = controls 
+        self.player_num = player_num
         
-        self.w, self.h = 42, 80
+        self.w, self.h = 46, 88
         self.x = x
         self.y = y
         self.vx = 0
@@ -145,43 +189,102 @@ class Fighter:
                 particles.append([self.x + self.w//2, self.y + self.h//2, random.uniform(-2, 2), random.uniform(-2, 2), self.saber_color, 180, random.randint(4, 7)])
 
     def draw(self, surface):
-        shadow_w = max(10, self.w + 15 - (abs(FLOOR_Y - (self.y + self.h)) // 3))
-        pygame.draw.ellipse(surface, (5, 4, 10), (self.x + self.w//2 - shadow_w//2, FLOOR_Y - 4, shadow_w, 8))
+        fx = self.x
+        fy = self.y
+        fw, fh = self.w, self.h
+        center_x = fx + fw // 2
+        
+        if self.player_num == 1:
+            armor_main = (0, 210, 255)       # Cyan
+            armor_accent = (180, 245, 255)   
+            visor_glow = (0, 255, 200)       
+            joint_color = (40, 55, 75)       
+        else:
+            armor_main = (255, 0, 128)       # Magenta/Pink
+            armor_accent = (255, 170, 215)   
+            visor_glow = (255, 220, 0)       
+            joint_color = (65, 35, 55)       
 
-        pygame.draw.rect(surface, self.color, (self.x, self.y + 22, self.w, 42), border_radius=6) 
-        pygame.draw.circle(surface, GOLD, (self.x + self.w//2, self.y + 11), 11) 
-        pygame.draw.rect(surface, DARK_GRAY, (self.x + 3, self.y + 64, self.w - 6, 16), border_radius=3) 
+        shadow_w = max(12, fw + 20 - (abs(FLOOR_Y - (fy + fh)) // 3))
+        pygame.draw.ellipse(surface, (5, 4, 10), (center_x - shadow_w//2, FLOOR_Y - 4, shadow_w, 8))
 
+        if self.state in ["attacking", "dashing"]:
+            aura_surf = pygame.Surface((fw + 30, fh + 30), pygame.SRCALPHA)
+            pygame.draw.ellipse(aura_surf, (*self.saber_color, 70), (0, 0, fw + 30, fh + 30))
+            surface.blit(aura_surf, (fx - 15, fy - 15))
+
+        # Legs & Boots
+        pygame.draw.rect(surface, joint_color, (center_x - 14, fy + 52, 10, 24), border_radius=3)
+        pygame.draw.rect(surface, armor_main, (center_x - 16, fy + 72, 12, 14), border_radius=3)
+        pygame.draw.rect(surface, WHITE, (center_x - 16, fy + 72, 12, 14), 1, border_radius=3)
+
+        pygame.draw.rect(surface, joint_color, (center_x + 4, fy + 52, 10, 24), border_radius=3)
+        pygame.draw.rect(surface, armor_main, (center_x + 4, fy + 72, 12, 14), border_radius=3)
+        pygame.draw.rect(surface, WHITE, (center_x + 4, fy + 72, 12, 14), 1, border_radius=3)
+
+        # Chest
+        pygame.draw.rect(surface, armor_main, (fx + 4, fy + 22, fw - 8, 32), border_radius=6)
+        pygame.draw.rect(surface, WHITE, (fx + 4, fy + 22, fw - 8, 32), 2, border_radius=6)
+        
+        pygame.draw.rect(surface, armor_accent, (center_x - 10, fy + 26, 20, 24), border_radius=4)
+        pygame.draw.circle(surface, WHITE, (center_x, fy + 38), 5)
+        pygame.draw.circle(surface, visor_glow, (center_x, fy + 38), 3)
+
+        # Shoulders
+        pad_y = fy + 20
+        pygame.draw.rect(surface, armor_accent, (fx - 3, pad_y, 12, 14), border_radius=4)
+        pygame.draw.rect(surface, WHITE, (fx - 3, pad_y, 12, 14), 1, border_radius=4)
+        
+        pygame.draw.rect(surface, armor_accent, (fx + fw - 9, pad_y, 12, 14), border_radius=4)
+        pygame.draw.rect(surface, WHITE, (fx + fw - 9, pad_y, 12, 14), 1, border_radius=4)
+
+        # Helmet
+        helmet_rect = pygame.Rect(center_x - 14, fy + 2, 28, 22)
+        pygame.draw.rect(surface, joint_color, helmet_rect, border_radius=8)
+        pygame.draw.rect(surface, armor_accent, helmet_rect, 2, border_radius=8)
+
+        # Visor
+        if self.facing == "right":
+            visor_rect = (center_x - 2, fy + 8, 14, 6)
+        else:
+            visor_rect = (center_x - 12, fy + 8, 14, 6)
+            
+        pygame.draw.rect(surface, visor_glow, visor_rect, border_radius=3)
+        pygame.draw.rect(surface, WHITE, visor_rect, 1, border_radius=3)
+
+        # Lightsaber
         saber_surface = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-        s_length = 50
+        s_length = 52
         
         if self.state == "attacking":
             if self.attack_type == "high":
-                ex = self.x + self.w + s_length if self.facing == "right" else self.x - s_length
-                ey = self.y - 15
+                ex = fx + fw + s_length if self.facing == "right" else fx - s_length
+                ey = fy - 18
             elif self.attack_type == "mid":
-                ex = self.x + self.w + s_length if self.facing == "right" else self.x - s_length
-                ey = self.y + 32
+                ex = fx + fw + s_length if self.facing == "right" else fx - s_length
+                ey = fy + 32
             else: 
-                ex = self.x + self.w + s_length if self.facing == "right" else self.x - s_length
-                ey = self.y + self.h - 5
-            origin = (self.x + self.w//2, self.y + 35)
+                ex = fx + fw + s_length if self.facing == "right" else fx - s_length
+                ey = fy + fh - 2
+            origin = (center_x, fy + 34)
         else:
-            ex = self.x + self.w + 8 if self.facing == "right" else self.x - 8
-            ey = self.y + 5
-            origin = (ex, self.y + 45)
+            ex = fx + fw + 10 if self.facing == "right" else fx - 10
+            ey = fy - 2
+            origin = (ex, fy + 42)
 
-        pygame.draw.line(saber_surface, (*self.saber_color, 75), origin, (ex, ey), 10)
-        pygame.draw.line(saber_surface, (*self.saber_color, 160), origin, (ex, ey), 6)
+        pygame.draw.line(surface, SILVER, origin, (origin[0] + (4 if self.facing=="right" else -4), origin[1] - 8), 4)
+
+        pygame.draw.line(saber_surface, (*self.saber_color, 80), origin, (ex, ey), 12)
+        pygame.draw.line(saber_surface, (*self.saber_color, 180), origin, (ex, ey), 6)
         pygame.draw.line(saber_surface, WHITE, origin, (ex, ey), 2)
         surface.blit(saber_surface, (0, 0))
 
         if self.state == "blocking":
-            shield_surf = pygame.Surface((self.w + 40, self.h + 30), pygame.SRCALPHA)
-            color_mask = SHIELD_BLUE if self.name == "PLAYER 1" else SHIELD_RED
-            pygame.draw.ellipse(shield_surf, color_mask, (0, 0, self.w + 40, self.h + 20))
-            pygame.draw.ellipse(shield_surf, WHITE, (0, 0, self.w + 40, self.h + 20), 2)
-            surface.blit(shield_surf, (self.x - 20, self.y - 10))
+            shield_surf = pygame.Surface((fw + 40, fh + 30), pygame.SRCALPHA)
+            color_mask = SHIELD_BLUE if self.player_num == 1 else SHIELD_RED
+            pygame.draw.ellipse(shield_surf, color_mask, (0, 0, fw + 40, fh + 20))
+            pygame.draw.ellipse(shield_surf, WHITE, (0, 0, fw + 40, fh + 20), 2)
+            surface.blit(shield_surf, (fx - 20, fy - 10))
 
 
 def process_combat_collisions(p1, p2):
@@ -215,16 +318,25 @@ def process_combat_collisions(p1, p2):
 
 def draw_cyber_background(surface):
     for y in range(0, FLOOR_Y):
-        color_val = max(10, 35 - int(y * 0.08))
-        pygame.draw.line(surface, (16, 12, color_val), (0, y), (WIDTH, y))
+        color_val = max(8, 32 - int(y * 0.07))
+        pygame.draw.line(surface, (12, 10, color_val), (0, y), (WIDTH, y))
 
     for star in stars:
-        pygame.draw.circle(surface, (120, 140, 180), (star[0], star[1]), star[2])
+        pygame.draw.circle(surface, (160, 180, 220), (star[0], star[1]), star[2])
 
     for s in skyscrapers:
-        pygame.draw.rect(surface, (18, 16, 26), (s[0], s[1], s[2], s[3]))
-        pygame.draw.rect(surface, (28, 26, 38), (s[0], s[1], s[2], s[3]), 1)
-        pygame.draw.line(surface, (40, 50, 80), (s[0], s[1]), (s[0] + s[2], s[1]), 2)
+        x, y, w, h = s['rect']
+        pygame.draw.rect(surface, s['color'], (x, y, w, h))
+        pygame.draw.rect(surface, (35, 35, 55), (x, y, w, h), 1)
+        pygame.draw.line(surface, (60, 70, 110), (x, y), (x + w, y), 2)
+
+        if s['has_antenna']:
+            ax = s['antenna_x']
+            pygame.draw.line(surface, (80, 80, 100), (ax, y), (ax, y - 18), 1)
+            pygame.draw.circle(surface, (255, 40, 40), (ax, y - 18), 2)
+
+        for wx, wy, ww, wh, color in s['windows']:
+            pygame.draw.rect(surface, color, (wx, wy, ww, wh))
 
     pygame.draw.rect(surface, DARK_GRAY, (0, FLOOR_Y, WIDTH, HEIGHT - FLOOR_Y))
 
@@ -250,8 +362,11 @@ def reset_match():
     p1_binds = {"left": pygame.K_a, "right": pygame.K_d, "jump": pygame.K_w, "block": pygame.K_s}
     p2_binds = {"left": pygame.K_LEFT, "right": pygame.K_RIGHT, "jump": pygame.K_UP, "block": pygame.K_DOWN}
     
-    p1 = Fighter(180, FLOOR_Y - 80, "PLAYER 1", (45, 60, 90), NEON_CYAN, p1_binds)
-    p2 = Fighter(WIDTH - 222, FLOOR_Y - 80, "PLAYER 2", (90, 45, 60), NEON_MAGENTA, p2_binds)
+    name_1 = p1_name_input.strip().upper() if p1_name_input.strip() else "PLAYER 1"
+    name_2 = p2_name_input.strip().upper() if p2_name_input.strip() else "PLAYER 2"
+
+    p1 = Fighter(180, FLOOR_Y - 88, name_1, NEON_CYAN, NEON_CYAN, p1_binds, player_num=1)
+    p2 = Fighter(WIDTH - 222, FLOOR_Y - 88, name_2, NEON_MAGENTA, NEON_MAGENTA, p2_binds, player_num=2)
     game_over = False
     winner_text = ""
 
@@ -281,8 +396,10 @@ while True:
 
         if event.type == pygame.MOUSEBUTTONDOWN:
             if game_state == "menu" and event.button == 1 and start_btn.collidepoint(mouse_pos):
-                game_state = "level_intro"
-                intro_timer = 90  
+                game_state = "name_input"
+                active_player_input = 1
+                p1_name_input = ""
+                p2_name_input = ""
             
             elif game_state == "paused" and event.button == 1:
                 if resume_btn.collidepoint(mouse_pos):
@@ -295,8 +412,29 @@ while True:
                     reset_match()
                     game_state = "menu"
 
+        # Text input handling for Name Input Phase
         if event.type == pygame.KEYDOWN:
-            # Global Pause Toggle Trigger
+            if game_state == "name_input":
+                if event.key == pygame.K_RETURN:
+                    if active_player_input == 1:
+                        active_player_input = 2
+                    elif active_player_input == 2:
+                        reset_match()
+                        game_state = "level_intro"
+                        intro_timer = 90
+                elif event.key == pygame.K_BACKSPACE:
+                    if active_player_input == 1:
+                        p1_name_input = p1_name_input[:-1]
+                    else:
+                        p2_name_input = p2_name_input[:-1]
+                else:
+                    if len(event.unicode) > 0 and event.unicode.isprintable():
+                        if active_player_input == 1 and len(p1_name_input) < 12:
+                            p1_name_input += event.unicode
+                        elif active_player_input == 2 and len(p2_name_input) < 12:
+                            p2_name_input += event.unicode
+
+            # Pause Toggle
             if event.key in [pygame.K_p, pygame.K_ESCAPE]:
                 if game_state in ["fight", "level_intro"]:
                     previous_state = game_state
@@ -342,14 +480,48 @@ while True:
         btn_txt = font_sub.render("ENTER THE ARENA", True, WHITE)
         display_surface.blit(btn_txt, (start_btn.x + (start_btn.width//2 - btn_txt.get_width()//2), start_btn.y + (start_btn.height//2 - btn_txt.get_height()//2)))
 
-    #2. CLEAN CONQUEST INTRO SPLASH
+    # 2. PLAYER NAME INPUT PHASE SCREEN
+    elif game_state == "name_input":
+        input_mask = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        input_mask.fill((10, 8, 16, 210))
+        display_surface.blit(input_mask, (0,0))
+
+        prompt_title = font_splash.render("ENTER COMBATANT NAMES", True, GOLD)
+        display_surface.blit(prompt_title, (WIDTH // 2 - prompt_title.get_width() // 2, 50))
+
+        # P1 Box
+        p1_box = pygame.Rect(WIDTH // 2 - 220, 150, 440, 50)
+        p1_border = NEON_CYAN if active_player_input == 1 else (60, 70, 90)
+        pygame.draw.rect(display_surface, GLASS_OVERLAY, p1_box, border_radius=6)
+        pygame.draw.rect(display_surface, p1_border, p1_box, 2, border_radius=6)
+        
+        p1_lbl = font_sub.render("PLAYER 1:", True, NEON_CYAN)
+        p1_txt = font_main.render(p1_name_input + ("|" if active_player_input == 1 else ""), True, WHITE)
+        display_surface.blit(p1_lbl, (p1_box.x - 100, p1_box.y + 14))
+        display_surface.blit(p1_txt, (p1_box.x + 15, p1_box.y + 10))
+
+        # P2 Box
+        p2_box = pygame.Rect(WIDTH // 2 - 220, 240, 440, 50)
+        p2_border = NEON_MAGENTA if active_player_input == 2 else (60, 70, 90)
+        pygame.draw.rect(display_surface, GLASS_OVERLAY, p2_box, border_radius=6)
+        pygame.draw.rect(display_surface, p2_border, p2_box, 2, border_radius=6)
+
+        p2_lbl = font_sub.render("PLAYER 2:", True, NEON_MAGENTA)
+        p2_txt = font_main.render(p2_name_input + ("|" if active_player_input == 2 else ""), True, WHITE)
+        display_surface.blit(p2_lbl, (p2_box.x - 100, p2_box.y + 14))
+        display_surface.blit(p2_txt, (p2_box.x + 15, p2_box.y + 10))
+
+        hint_txt = font_sub.render("TYPE YOUR NAME AND PRESS ENTER TO CONFIRM", True, SILVER)
+        display_surface.blit(hint_txt, (WIDTH // 2 - hint_txt.get_width() // 2, 340))
+
+    # 3. LEVEL INTRO SPLASH
     elif game_state == "level_intro":
         intro_mask = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
         intro_mask.fill((10, 8, 16, 120))
         display_surface.blit(intro_mask, (0,0))
 
         match_txt = font_splash.render("PREPARE YOURSELF", True, WHITE)
-        objective_txt = font_main.render("ELIMINATE THE OPPONENT", True, GOLD)
+        objective_txt = font_main.render(f"{p1.name}  VS  {p2.name}", True, GOLD)
         
         display_surface.blit(match_txt, (WIDTH // 2 - match_txt.get_width() // 2, HEIGHT // 2 - 60))
         display_surface.blit(objective_txt, (WIDTH // 2 - objective_txt.get_width() // 2, HEIGHT // 2 + 5))
@@ -358,7 +530,7 @@ while True:
         if intro_timer <= 0:
             game_state = "fight"
 
-    #3. ACTIVE FIGHT SIMULATION LAYER
+    # 4. ACTIVE FIGHT SIMULATION LAYER & HIGHLIGHTED HUD
     elif game_state in ["fight", "paused"]:
         if game_state == "fight" and not game_over:
             keys = pygame.key.get_pressed()
@@ -371,11 +543,11 @@ while True:
             if p1.hp <= 0:
                 p1.hp = 0
                 game_over = True
-                winner_text = "PLAYER 2 VICTORIOUS! DOMINATOR MATCH COMPLETE"
+                winner_text = f"{p2.name} VICTORIOUS! DOMINATOR MATCH COMPLETE"
             elif p2.hp <= 0:
                 p2.hp = 0
                 game_over = True
-                winner_text = "PLAYER 1 VICTORIOUS! DOMINATOR MATCH COMPLETE"
+                winner_text = f"{p1.name} VICTORIOUS! DOMINATOR MATCH COMPLETE"
 
         p1.draw(display_surface)
         p2.draw(display_surface)
@@ -394,27 +566,53 @@ while True:
                 pygame.draw.circle(display_surface, (255, 255, 255, 100), (flash[0], flash[1]), flash[2], 2)
                 if flash[3] <= 0: hit_flashes.remove(flash)
 
-        pygame.draw.rect(display_surface, GLASS_OVERLAY, (40, 35, 320, 20), border_radius=2)
-        if p1.display_hp > 0: pygame.draw.rect(display_surface, WHITE, (40, 35, int(320 * (p1.display_hp / 100)), 20), border_radius=2)
-        pygame.draw.rect(display_surface, NEON_CYAN, (40, 35, int(320 * (p1.hp / 100)), 20), border_radius=2)
-        display_surface.blit(font_main.render(p1.name, True, WHITE), (40, 60))
+        # Player 1 HUD Block
+        bar_x1, bar_y, bar_w, bar_h = 40, 30, 340, 26
         
-        cd_w_1 = int(60 * (p1.dash_cooldown / 45))
-        if cd_w_1 > 0: pygame.draw.rect(display_surface, GOLD, (40, 88, cd_w_1, 4))
-
-        pygame.draw.rect(display_surface, GLASS_OVERLAY, (WIDTH - 360, 35, 320, 20), border_radius=2)
-        if p2.display_hp > 0: pygame.draw.rect(display_surface, WHITE, (WIDTH - 360, 35, int(320 * (p2.display_hp / 100)), 20), border_radius=2)
-        pygame.draw.rect(display_surface, NEON_MAGENTA, (WIDTH - 360, 35, int(320 * (p2.hp / 100)), 20), border_radius=2)
-        name_obj = font_main.render(p2.name, True, WHITE)
-        display_surface.blit(name_obj, (WIDTH - 40 - name_obj.get_width(), 60))
+        pygame.draw.rect(display_surface, (0, 100, 140), (bar_x1 - 4, bar_y - 4, bar_w + 8, bar_h + 8), border_radius=6)
+        pygame.draw.rect(display_surface, NEON_CYAN, (bar_x1 - 2, bar_y - 2, bar_w + 4, bar_h + 4), 2, border_radius=5)
+        pygame.draw.rect(display_surface, BLACK, (bar_x1, bar_y, bar_w, bar_h), border_radius=4)
         
-        cd_w_2 = int(60 * (p2.dash_cooldown / 45))
-        if cd_w_2 > 0: pygame.draw.rect(display_surface, GOLD, (WIDTH - 40 - cd_w_2, 88, cd_w_2, 4))
+        if p1.display_hp > 0: 
+            pygame.draw.rect(display_surface, (255, 255, 255), (bar_x1, bar_y, int(bar_w * (p1.display_hp / 100)), bar_h), border_radius=4)
+        if p1.hp > 0:
+            pygame.draw.rect(display_surface, NEON_CYAN, (bar_x1, bar_y, int(bar_w * (p1.hp / 100)), bar_h), border_radius=4)
+        
+        pygame.draw.line(display_surface, (200, 255, 255), (bar_x1, bar_y + 2), (bar_x1 + bar_w, bar_y + 2), 1)
 
+        p1_name_surf = font_main.render(p1.name, True, WHITE)
+        display_surface.blit(p1_name_surf, (bar_x1, bar_y + 32))
+        pygame.draw.rect(display_surface, NEON_CYAN, (bar_x1, bar_y + 60, p1_name_surf.get_width(), 3))
+        
+        cd_w_1 = int(70 * (p1.dash_cooldown / 45))
+        if cd_w_1 > 0: pygame.draw.rect(display_surface, GOLD, (bar_x1, bar_y + 68, cd_w_1, 4))
+
+        # Player 2 HUD Block
+        bar_x2 = WIDTH - 380
+        
+        pygame.draw.rect(display_surface, (140, 0, 70), (bar_x2 - 4, bar_y - 4, bar_w + 8, bar_h + 8), border_radius=6)
+        pygame.draw.rect(display_surface, NEON_MAGENTA, (bar_x2 - 2, bar_y - 2, bar_w + 4, bar_h + 4), 2, border_radius=5)
+        pygame.draw.rect(display_surface, BLACK, (bar_x2, bar_y, bar_w, bar_h), border_radius=4)
+        
+        if p2.display_hp > 0: 
+            pygame.draw.rect(display_surface, (255, 255, 255), (bar_x2, bar_y, int(bar_w * (p2.display_hp / 100)), bar_h), border_radius=4)
+        if p2.hp > 0:
+            pygame.draw.rect(display_surface, NEON_MAGENTA, (bar_x2, bar_y, int(bar_w * (p2.hp / 100)), bar_h), border_radius=4)
+
+        pygame.draw.line(display_surface, (255, 200, 230), (bar_x2, bar_y + 2), (bar_x2 + bar_w, bar_y + 2), 1)
+
+        p2_name_surf = font_main.render(p2.name, True, WHITE)
+        display_surface.blit(p2_name_surf, (bar_x2 + bar_w - p2_name_surf.get_width(), bar_y + 32))
+        pygame.draw.rect(display_surface, NEON_MAGENTA, (bar_x2 + bar_w - p2_name_surf.get_width(), bar_y + 60, p2_name_surf.get_width(), 3))
+
+        cd_w_2 = int(70 * (p2.dash_cooldown / 45))
+        if cd_w_2 > 0: pygame.draw.rect(display_surface, GOLD, (bar_x2 + bar_w - cd_w_2, bar_y + 68, cd_w_2, 4))
+
+        # Center VS Badge
         vs_obj = font_main.render("VS", True, GOLD)
-        display_surface.blit(vs_obj, (WIDTH // 2 - vs_obj.get_width() // 2, 32))
+        display_surface.blit(vs_obj, (WIDTH // 2 - vs_obj.get_width() // 2, 28))
 
-        #4. DYNAMIC INTERACTIVE PAUSE OVERLAY
+        # PAUSE OVERLAY
         if game_state == "paused":
             pause_mask = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
             pause_mask.fill((10, 8, 16, 200))
@@ -441,7 +639,7 @@ while True:
             t3 = font_sub.render("RETURN TO MAIN LOBBY", True, WHITE)
             display_surface.blit(t3, (home_btn.x + (home_btn.width//2 - t3.get_width()//2), home_btn.y + (home_btn.height//2 - t3.get_height()//2)))
 
-    #5. GAME OVER ROUND OVERLAY
+    # 5. GAME OVER OVERLAY
     if game_over:
         overlay = pygame.Surface((WIDTH, HEIGHT))
         overlay.fill(BLACK)
