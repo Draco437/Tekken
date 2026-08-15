@@ -3,6 +3,7 @@ import random
 import sys
 
 pygame.init()
+pygame.mixer.init()
 
 WIDTH, HEIGHT = 900, 500
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
@@ -37,6 +38,13 @@ try:
 except Exception as e:
     print("Could not load background.png! Using default backdrop.")
     bg_image = None
+
+try:
+    pygame.mixer.music.load("sounds/bg_music.mp3")
+    pygame.mixer.music.set_volume(0.3)
+    pygame.mixer.music.play(-1)  # -1 means loop indefinitely
+except Exception as e:
+    print("Could not load background music:", e)
 
 game_over = False
 winner_text = ""
@@ -299,6 +307,10 @@ def draw_cyber_background(surface):
 
 def reset_match():
     global p1, p2, game_over, winner_text
+
+    if pygame.mixer.get_init():
+        pygame.mixer.music.set_volume(0.3)
+
     p1_binds = {"left": pygame.K_a, "right": pygame.K_d, "jump": pygame.K_w, "block": pygame.K_s}
     p2_binds = {"left": pygame.K_LEFT, "right": pygame.K_RIGHT, "jump": pygame.K_UP, "block": pygame.K_DOWN}
     
@@ -307,7 +319,7 @@ def reset_match():
 
     # Multi-frame sprite maps for Player 1 and Player 2
     p1_anims = {
-        "idle": ["Images1/Front/A1.png"],
+        "idle": ["Images1/Front/I2.png"],
         "attacking": ["Images1/Front/A1.png", "Images1/Front/A2.png", "Images1/Front/A3.png"],
         "jumping": ["Images1/Front/J1.png", "Images1/Front/J2.png", "Images1/Front/J3.png"],
         "blocking": ["Images1/Front/B1.png"],
@@ -316,7 +328,7 @@ def reset_match():
     }
 
     p2_anims = {
-        "idle": ["Images2/Front/A1.png"],
+        "idle": ["Images2/Front/I1.png", "Images2/Front/I1.png"],
         "attacking": ["Images2/Front/A1.png", "Images2/Front/A2.png", "Images2/Front/A3.png"],
         "jumping": ["Images2/Front/J1.png", "Images2/Front/J2.png", "Images2/Front/J3.png"],
         "blocking": ["Images2/Front/B1.png"],
@@ -365,10 +377,12 @@ while True:
             elif game_state == "paused" and event.button == 1:
                 if resume_btn.collidepoint(mouse_pos):
                     game_state = previous_state
+                    pygame.mixer.music.unpause()
                 elif restart_btn.collidepoint(mouse_pos):
                     reset_match()
                     game_state = "level_intro"
                     intro_timer = 90
+                    pygame.mixer.music.play(-1)
                 elif home_btn.collidepoint(mouse_pos):
                     reset_match()
                     game_state = "menu"
@@ -398,8 +412,10 @@ while True:
                 if game_state in ["fight", "level_intro"]:
                     previous_state = game_state
                     game_state = "paused"
+                    pygame.mixer.music.pause()
                 elif game_state == "paused":
                     game_state = previous_state
+                    pygame.mixer.music.unpause()
 
             if game_state == "fight" and not game_over:
                 if event.key == pygame.K_g: p1.attack()
@@ -511,9 +527,11 @@ while True:
             if p1.state == "defeated" and p1.state_timer == 0:
                 game_over = True
                 winner_text = f"{p2.name} VICTORIOUS! DOMINATOR MATCH COMPLETE"
+                pygame.mixer.music.set_volume(0.1)
             elif p2.state == "defeated" and p2.state_timer == 0:
                 game_over = True
                 winner_text = f"{p1.name} VICTORIOUS! DOMINATOR MATCH COMPLETE"
+                pygame.mixer.music.set_volume(0.1)
 
         p1.draw(display_surface)
         p2.draw(display_surface)
