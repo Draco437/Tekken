@@ -1,6 +1,11 @@
 import pygame
 import random
 import sys
+import asyncio
+import threading
+import os
+import time
+import edge_tts
 
 pygame.init()
 pygame.mixer.init()
@@ -31,6 +36,10 @@ GRAVITY = 0.9
 FLOOR_Y = HEIGHT - 70 
 FRICTION = 0.82
 
+# Audio Temp Directory Setup
+AUDIO_DIR = "temp_audio"
+os.makedirs(AUDIO_DIR, exist_ok=True)
+
 # LOAD BACKGROUND IMAGE
 try:
     bg_image = pygame.image.load("background.png").convert_alpha()
@@ -46,12 +55,45 @@ try:
 except Exception as e:
     print("Could not load background music:", e)
 
+# -------------------------------------------------------------
+# EDGE-TTS BACKGROUND WORKER & AUDIO PLAYER
+# -------------------------------------------------------------
+# Voice options: "en-US-ChristopherNeural" (Deep Announcer), "en-US-GuyNeural", "en-US-EricNeural"
+VOICE = "en-US-ChristopherNeural"
+
+def speak_text_async(text, channel_id=1):
+    """Fires edge-tts synthesis in a non-blocking background thread."""
+    threading.Thread(target=_generate_and_play, args=(text, channel_id), daemon=True).start()
+
+def _generate_and_play(text, channel_id):
+    async def _tts_task():
+        filename = os.path.join(AUDIO_DIR, f"announcer_{int(time.time() * 1000)}.mp3")
+        communicate = edge_tts.Communicate(text, VOICE)
+        await communicate.save(filename)
+        return filename
+
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        mp3_file = loop.run_until_complete(_tts_task())
+        loop.close()
+
+        # Play generated audio via Pygame Channel
+        if os.path.exists(mp3_file):
+            speech_sound = pygame.mixer.Sound(mp3_file)
+            speech_sound.set_volume(1.0)
+            pygame.mixer.Channel(channel_id).play(speech_sound)
+    except Exception as err:
+        print(f"[edge-tts error]: {err}")
+
+# -------------------------------------------------------------
+
 game_over = False
 winner_text = ""
 camera_shake = 0
 game_state = "menu" 
 previous_state = "fight" 
-intro_timer = 0      
+intro_timer = 0       
 
 p1_name_input = ""
 p2_name_input = ""
@@ -62,7 +104,6 @@ hit_flashes = []
 
 
 def load_animation_sequence(file_paths, target_width, target_height):
-    """Loads a list of image file paths into Pygame surfaces for both Right and Left facing directions."""
     frames_right = []
     frames_left = []
     
@@ -73,8 +114,7 @@ def load_animation_sequence(file_paths, target_width, target_height):
             scaled_left = pygame.transform.flip(scaled_right, True, False)
             frames_right.append(scaled_right)
             frames_left.append(scaled_left)
-        except Exception as e:
-            # Fallback block surface if image path is missing
+        except Exception:
             fallback = pygame.Surface((target_width, target_height))
             fallback.fill((180, 180, 180))
             frames_right.append(fallback)
@@ -102,24 +142,20 @@ class Fighter:
         self.max_hp = 100
         self.display_hp = 100  
         
-        # State & Animation handling
         self.state = "idle" 
         self.state_timer = 0
         self.facing = "right"
         self.dash_cooldown = 0
-        self.has_hit_target = False  # Prevents multiple hits per single swing
+        self.has_hit_target = False 
         
-        # Animation Frame Tracking
         self.anim_frame = 0.0
-        self.anim_speed = 0.12  # Slowed frame step speed so multi-frame animations stay visible
+        self.anim_speed = 0.12 
         
-        # Load Animation Sequences
         self.animations = {}
         for state_key, paths in anim_paths_dict.items():
             self.animations[state_key] = load_animation_sequence(paths, self.w, self.h)
 
     def update(self, keys, opponent):
-        # Update facing direction relative to opponent
         self.facing = "right" if self.x < opponent.x else "left"
         
         if self.dash_cooldown > 0:
@@ -128,7 +164,6 @@ class Fighter:
         if self.state != "dashing":
             self.vx *= FRICTION
 
-        # State Duration Timers
         if self.state_timer > 0:
             self.state_timer -= 1
             if self.state_timer == 0:
@@ -136,12 +171,10 @@ class Fighter:
                 self.anim_frame = 0
                 self.has_hit_target = False
 
-        # Block State Logic
         if self.state == "blocking" and not keys[self.controls["block"]]:
             self.state = "idle"
             self.anim_frame = 0
 
-        # Movement Inputs (Only allowed when not locked in attack/hit/dash recovery)
         if self.state in ["idle", "jumping", "blocking"]:
             if keys[self.controls["block"]]:
                 if self.state != "blocking":
@@ -158,7 +191,6 @@ class Fighter:
                     self.state = "jumping"
                     self.anim_frame = 0
 
-        # Apply Physics
         self.x += self.vx
         self.y += self.vy
         
@@ -171,21 +203,18 @@ class Fighter:
             if self.state == "jumping": 
                 self.state = "idle"
 
-        # Boundary checks
         if self.x < 20: self.x = 20
         if self.x > WIDTH - self.w - 20: self.x = WIDTH - self.w - 20
 
-        # Smooth HP Bar Interpolation
         if self.display_hp > self.hp:
             self.display_hp -= 0.5
 
-        # Progress Animation Frames
         self.anim_frame += self.anim_speed
 
     def attack(self):
         if self.state in ["idle", "jumping"]:
             self.state = "attacking"
-            self.state_timer = 28  # Extended duration to fit 3 attack animation frames
+            self.state_timer = 28 
             self.anim_frame = 0
             self.has_hit_target = False
             self.vx = 5 if self.facing == "right" else -5 
@@ -219,28 +248,17 @@ class Fighter:
         fw, fh = self.w, self.h
         center_x = fx + fw // 2
 
-        # Ground Shadow
         shadow_w = max(12, fw + 16 - (abs(FLOOR_Y - (fy + fh)) // 3))
         pygame.draw.ellipse(surface, (15, 12, 10), (center_x - shadow_w // 2, FLOOR_Y - 4, shadow_w, 8))
 
-        # # Dash / Attack Aura
-        # if self.state in ["attacking", "dashing"]:
-        #     aura_surf = pygame.Surface((fw + 30, fh + 30), pygame.SRCALPHA)
-        #     pygame.draw.ellipse(aura_surf, (*self.saber_color, 65), (0, 0, fw + 30, fh + 30))
-        #     surface.blit(aura_surf, (fx - 15, fy - 15))
-
-        # --- SPRITE ANIMATION RENDER ---
         current_anim_key = self.state if self.state in self.animations else "idle"
         frames = self.animations[current_anim_key][self.facing]
 
         if self.state == "defeated":
-            total_dur = 45  # Total duration of defeat animation before Game Over triggers
+            total_dur = 45 
             progress = 1.0 - (max(0, self.state_timer) / total_dur)
             frame_idx = min(int(progress * len(frames)), len(frames) - 1)
-        
-        # Calculate active frame based on progress
-        if len(frames) > 1 and self.state_timer > 0:
-            # Map remaining state_timer proportionally to available frames
+        elif len(frames) > 1 and self.state_timer > 0:
             total_duration = 28 if self.state == "attacking" else (28 if self.state == "hit" else 10)
             progress = 1.0 - max(0, self.state_timer / total_duration)
             frame_idx = min(int(progress * len(frames)), len(frames) - 1)
@@ -250,26 +268,17 @@ class Fighter:
         current_sprite = frames[frame_idx]
         surface.blit(current_sprite, (fx, fy))
 
-        # # Shield Visual Overlay during blocking
-        # if self.state == "blocking":
-        #     shield_surf = pygame.Surface((fw + 30, fh + 20), pygame.SRCALPHA)
-        #     color_mask = SHIELD_BLUE if self.player_num == 1 else SHIELD_RED
-        #     pygame.draw.ellipse(shield_surf, color_mask, (0, 0, fw + 30, fh + 20))
-        #     pygame.draw.ellipse(shield_surf, WHITE, (0, 0, fw + 30, fh + 20), 2)
-        #     surface.blit(shield_surf, (fx - 15, fy + 10))
-
 
 def process_combat_collisions(p1, p2):
     global camera_shake
     
-    # Check attack hitbox during middle frames of attack duration
     if p1.state == "attacking" and (3 <= p1.state_timer <= 14) and not p1.has_hit_target:
         reach = 75
         hx = p1.x + p1.w if p1.facing == "right" else p1.x - reach
         hy = p1.y + 20
 
         if pygame.Rect(hx, hy, reach, 45).colliderect(pygame.Rect(p2.x, p2.y, p2.w, p2.h)):
-            p1.has_hit_target = True  # Register hit once per swing
+            p1.has_hit_target = True 
             
             if p2.state == "blocking":
                 p2.vx = 5 if p1.facing == "right" else -5  
@@ -283,7 +292,7 @@ def process_combat_collisions(p1, p2):
             else:
                 p2.hp -= 15
                 p2.state = "hit"
-                p2.state_timer = 28  # Hit-stun duration allowing hit animation frames to render
+                p2.state_timer = 28 
                 p2.anim_frame = 0
                 p2.vx = 11 if p1.facing == "right" else -11
                 camera_shake = 12 
@@ -317,7 +326,6 @@ def reset_match():
     name_1 = p1_name_input.strip().upper() if p1_name_input.strip() else "PLAYER 1"
     name_2 = p2_name_input.strip().upper() if p2_name_input.strip() else "PLAYER 2"
 
-    # Multi-frame sprite maps for Player 1 and Player 2
     p1_anims = {
         "idle": ["Images1/Front/I2.png"],
         "attacking": ["Images1/Front/A1.png", "Images1/Front/A2.png", "Images1/Front/A3.png"],
@@ -396,6 +404,11 @@ while True:
                         reset_match()
                         game_state = "level_intro"
                         intro_timer = 90
+                        pygame.mixer.music.set_volume(0.1)
+
+                        # TRIGGER NEURAL ANNOUNCER WITH DYNAMIC COMBATANT NAMES
+                        speak_text_async(f"{p1.name} versus {p2.name}! Fight!")
+
                 elif event.key == pygame.K_BACKSPACE:
                     if active_player_input == 1:
                         p1_name_input = p1_name_input[:-1]
@@ -428,6 +441,7 @@ while True:
                 reset_match()
                 game_state = "level_intro"
                 intro_timer = 90
+                speak_text_async("Rematch initiated! Prepare for battle!")
 
             if event.key == pygame.K_q and game_over:
                 reset_match()
@@ -436,47 +450,82 @@ while True:
     # 1. MENU SCREEN
     if game_state == "menu":
         menu_mask = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-        menu_mask.fill((10, 8, 16, 180))
+        menu_mask.fill((10, 8, 16, 210))
         display_surface.blit(menu_mask, (0, 0))
 
+        # Pulsing text glow effect
+        glow_alpha = int(180 + 75 * abs((pygame.time.get_ticks() % 1000) - 500) / 500)
+        
+        title_glow = font_title.render("LIGHTSABER DUEL", True, NEON_CYAN)
+        title_glow.set_alpha(glow_alpha // 3)
         title_obj = font_title.render("LIGHTSABER DUEL", True, WHITE)
+
+        title_x = WIDTH // 2 - title_obj.get_width() // 2
+        title_y = HEIGHT // 2 - 110
+
+        display_surface.blit(title_glow, (title_x - 2, title_y - 2))
+        display_surface.blit(title_glow, (title_x + 2, title_y + 2))
+        display_surface.blit(title_obj, (title_x, title_y))
+
         sub_obj = font_sub.render("2-PLAYER VERSUS ARENA MODE", True, SILVER)
-        display_surface.blit(title_obj, (WIDTH // 2 - title_obj.get_width() // 2, HEIGHT // 2 - 110))
         display_surface.blit(sub_obj, (WIDTH // 2 - sub_obj.get_width() // 2, HEIGHT // 2 - 40))
 
         is_hover = start_btn.collidepoint(mouse_pos)
-        pygame.draw.rect(display_surface, GOLD if is_hover else GLASS_OVERLAY, start_btn, border_radius=4)
-        pygame.draw.rect(display_surface, WHITE if is_hover else GOLD, start_btn, 1, border_radius=4)
         
-        btn_txt = font_sub.render("ENTER THE ARENA", True, WHITE)
+        btn_bg = pygame.Surface((start_btn.width, start_btn.height), pygame.SRCALPHA)
+        btn_bg.fill((0, 243, 255, 30) if is_hover else (18, 16, 26, 200))
+        display_surface.blit(btn_bg, (start_btn.x, start_btn.y))
+
+        pygame.draw.rect(display_surface, WHITE if is_hover else GOLD, start_btn, 2 if is_hover else 1, border_radius=4)
+        
+        btn_txt = font_sub.render("ENTER THE ARENA", True, NEON_CYAN if is_hover else WHITE)
         display_surface.blit(btn_txt, (start_btn.x + (start_btn.width // 2 - btn_txt.get_width() // 2), start_btn.y + (start_btn.height // 2 - btn_txt.get_height() // 2)))
 
     # 2. NAME INPUT SCREEN
     elif game_state == "name_input":
         input_mask = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-        input_mask.fill((10, 8, 16, 210))
+        input_mask.fill((10, 8, 16, 220))
         display_surface.blit(input_mask, (0, 0))
 
-        prompt_title = font_splash.render("ENTER COMBATANT NAMES", True, GOLD)
-        display_surface.blit(prompt_title, (WIDTH // 2 - prompt_title.get_width() // 2, 50))
+        prompt_glow = font_splash.render("ENTER COMBATANT NAMES", True, GOLD)
+        prompt_glow.set_alpha(100)
+        prompt_title = font_splash.render("ENTER COMBATANT NAMES", True, WHITE)
+        
+        prompt_x = WIDTH // 2 - prompt_title.get_width() // 2
+        display_surface.blit(prompt_glow, (prompt_x - 1, 49))
+        display_surface.blit(prompt_title, (prompt_x, 50))
 
+        # Blinking cursor character
+        show_cursor = (pygame.time.get_ticks() // 400) % 2 == 0
+        cursor_str = "|" if show_cursor else " "
+
+        # Player 1 Box
         p1_box = pygame.Rect(WIDTH // 2 - 220, 150, 440, 50)
         p1_border = NEON_CYAN if active_player_input == 1 else (60, 70, 90)
-        pygame.draw.rect(display_surface, GLASS_OVERLAY, p1_box, border_radius=6)
-        pygame.draw.rect(display_surface, p1_border, p1_box, 2, border_radius=6)
+        
+        p1_bg = pygame.Surface((p1_box.width, p1_box.height), pygame.SRCALPHA)
+        p1_bg.fill((0, 243, 255, 20) if active_player_input == 1 else (18, 16, 26, 180))
+        display_surface.blit(p1_bg, (p1_box.x, p1_box.y))
+
+        pygame.draw.rect(display_surface, p1_border, p1_box, 2 if active_player_input == 1 else 1, border_radius=6)
         
         p1_lbl = font_sub.render("PLAYER 1:", True, NEON_CYAN)
-        p1_txt = font_main.render(p1_name_input + ("|" if active_player_input == 1 else ""), True, WHITE)
+        p1_txt = font_main.render(p1_name_input + (cursor_str if active_player_input == 1 else ""), True, WHITE)
         display_surface.blit(p1_lbl, (p1_box.x - 100, p1_box.y + 14))
         display_surface.blit(p1_txt, (p1_box.x + 15, p1_box.y + 10))
 
+        # Player 2 Box
         p2_box = pygame.Rect(WIDTH // 2 - 220, 240, 440, 50)
         p2_border = NEON_MAGENTA if active_player_input == 2 else (60, 70, 90)
-        pygame.draw.rect(display_surface, GLASS_OVERLAY, p2_box, border_radius=6)
-        pygame.draw.rect(display_surface, p2_border, p2_box, 2, border_radius=6)
+        
+        p2_bg = pygame.Surface((p2_box.width, p2_box.height), pygame.SRCALPHA)
+        p2_bg.fill((255, 0, 110, 20) if active_player_input == 2 else (18, 16, 26, 180))
+        display_surface.blit(p2_bg, (p2_box.x, p2_box.y))
+
+        pygame.draw.rect(display_surface, p2_border, p2_box, 2 if active_player_input == 2 else 1, border_radius=6)
 
         p2_lbl = font_sub.render("PLAYER 2:", True, NEON_MAGENTA)
-        p2_txt = font_main.render(p2_name_input + ("|" if active_player_input == 2 else ""), True, WHITE)
+        p2_txt = font_main.render(p2_name_input + (cursor_str if active_player_input == 2 else ""), True, WHITE)
         display_surface.blit(p2_lbl, (p2_box.x - 100, p2_box.y + 14))
         display_surface.blit(p2_txt, (p2_box.x + 15, p2_box.y + 10))
 
@@ -489,11 +538,11 @@ while True:
         intro_mask.fill((10, 8, 16, 120))
         display_surface.blit(intro_mask, (0, 0))
 
-        match_txt = font_splash.render("PREPARE YOURSELF", True, WHITE)
-        objective_txt = font_main.render(f"{p1.name}  VS  {p2.name}", True, GOLD)
+        vs_title = font_splash.render(f"{p1.name}   VS   {p2.name}", True, GOLD)
+        fight_txt = font_main.render("LET THE FIGHT BEGIN!", True, WHITE)
         
-        display_surface.blit(match_txt, (WIDTH // 2 - match_txt.get_width() // 2, HEIGHT // 2 - 60))
-        display_surface.blit(objective_txt, (WIDTH // 2 - objective_txt.get_width() // 2, HEIGHT // 2 + 5))
+        display_surface.blit(vs_title, (WIDTH // 2 - vs_title.get_width() // 2, HEIGHT // 2 - 50))
+        display_surface.blit(fight_txt, (WIDTH // 2 - fight_txt.get_width() // 2, HEIGHT // 2 + 20))
         
         intro_timer -= 1
         if intro_timer <= 0:
@@ -516,28 +565,31 @@ while True:
             if p1.hp <= 0 and p1.state != "defeated":
                 p1.hp = 0
                 p1.state = "defeated"
-                p1.state_timer = 45  # ~0.75 seconds to display full collapse to D1.png
-                p1.vx = -4  # Slight knockback force on defeat
+                p1.state_timer = 45 
+                p1.vx = -4 
             elif p2.hp <= 0 and p2.state != "defeated":
                 p2.hp = 0
                 p2.state = "defeated"
                 p2.state_timer = 45
                 p2.vx = 4
 
+            # GAME OVER TRIGGER WITH ANNOUNCER VICTORY VOICE
             if p1.state == "defeated" and p1.state_timer == 0:
                 game_over = True
                 winner_text = f"{p2.name} VICTORIOUS! DOMINATOR MATCH COMPLETE"
                 pygame.mixer.music.set_volume(0.1)
+                speak_text_async(f"{p2.name} wins the match! Dominator victory!")
+
             elif p2.state == "defeated" and p2.state_timer == 0:
                 game_over = True
                 winner_text = f"{p1.name} VICTORIOUS! DOMINATOR MATCH COMPLETE"
                 pygame.mixer.music.set_volume(0.1)
+                speak_text_async(f"{p1.name} wins the match! Dominator victory!")
 
         p1.draw(display_surface)
         p2.draw(display_surface)
 
         if game_state == "fight":
-            # Particles processing
             for part in particles[:]:
                 part[0] += part[2]
                 part[1] += part[3]
@@ -550,7 +602,6 @@ while True:
                     pygame.draw.circle(p_surf, (*part[4], part[5]), (part[6], part[6]), part[6])
                     display_surface.blit(p_surf, (part[0] - part[6], part[1] - part[6]))
 
-            # Hit Flash processing
             for flash in hit_flashes[:]:
                 flash[2] += 6
                 flash[3] -= 1
