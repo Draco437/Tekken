@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+temp_audio/
+announcer_temp.mp3
+.DS_Store

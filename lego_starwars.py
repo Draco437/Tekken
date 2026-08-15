@@ -5,430 +5,905 @@ import asyncio
 import threading
 import os
 import time
+import math
 import edge_tts
 
+# Initialize Pygame and Mixer
 pygame.init()
-pygame.mixer.init()
+pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
 
-WIDTH, HEIGHT = 900, 500
+# Display Config
+WIDTH, HEIGHT = 960, 540
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
-pygame.display.set_caption("TECH BRAWLERS: LIGHTSABER VERSUS SHOWDOWN")
+pygame.display.set_caption("TEKKEN BRAWL: OGRE VS PRINCESS")
 
-# Core Palette
+# Color Palette
 BLACK = (10, 8, 16)
 WHITE = (255, 255, 255)
-DARK_GRAY = (24, 22, 34)
-NEON_CYAN = (0, 243, 255)
-NEON_MAGENTA = (255, 0, 110)
-GOLD = (255, 190, 11)
-SILVER = (150, 154, 172)
-GLASS_OVERLAY = (18, 16, 26)
-SHIELD_BLUE = (0, 191, 255, 110)
-SHIELD_RED = (255, 69, 0, 110)
+DARK_BG = (14, 12, 22)
+DARK_PANEL = (22, 20, 34)
+BORDER_COLOR = (45, 40, 65)
+
+# Player Colors & Neons
+OGRE_GREEN = (0, 240, 120)
+OGRE_DARK = (0, 140, 70)
+PRINCESS_PINK = (255, 40, 140)
+PRINCESS_DARK = (160, 10, 80)
+GOLD = (255, 210, 30)
+GOLD_DARK = (180, 140, 10)
+SILVER = (180, 185, 200)
+CYAN_ACCENT = (0, 230, 255)
+RED_DAMAGE = (255, 50, 50)
+SUPER_ORANGE = (255, 140, 0)
 
 clock = pygame.time.Clock()
-font_sub = pygame.font.SysFont("Arial", 16, bold=True)
-font_main = pygame.font.SysFont("Impact", 24)
-font_title = pygame.font.SysFont("Impact", 64)
-font_splash = pygame.font.SysFont("Impact", 50)
 
-GRAVITY = 0.9
-FLOOR_Y = HEIGHT - 70 
-FRICTION = 0.82
+# Fonts
+font_small = pygame.font.SysFont("Arial", 14, bold=True)
+font_sub = pygame.font.SysFont("Arial", 17, bold=True)
+font_hud = pygame.font.SysFont("Impact", 22)
+font_timer = pygame.font.SysFont("Impact", 36)
+font_title = pygame.font.SysFont("Impact", 68)
+font_banner = pygame.font.SysFont("Impact", 54)
+font_combo = pygame.font.SysFont("Impact", 28)
+
+GRAVITY = 0.85
+FLOOR_Y = HEIGHT - 68
+FRICTION = 0.80
 
 # Audio Temp Directory Setup
 AUDIO_DIR = "temp_audio"
 os.makedirs(AUDIO_DIR, exist_ok=True)
 
-# LOAD BACKGROUND IMAGE
-try:
-    bg_image = pygame.image.load("background.png").convert_alpha()
-    bg_image = pygame.transform.scale(bg_image, (WIDTH, HEIGHT))
-except Exception as e:
-    print("Could not load background.png! Using default backdrop.")
-    bg_image = None
+# Load Arena Background
+bg_image = None
+for bg_filename in ["Back.png", "background.png", "background.jpg"]:
+    if os.path.exists(bg_filename):
+        try:
+            raw_bg = pygame.image.load(bg_filename).convert()
+            bg_image = pygame.transform.scale(raw_bg, (WIDTH, HEIGHT))
+            break
+        except Exception as e:
+            print(f"Failed to load {bg_filename}: {e}")
 
+# Load Background Music
 try:
-    pygame.mixer.music.load("sounds/bg_music.mp3")
-    pygame.mixer.music.set_volume(0.3)
-    pygame.mixer.music.play(-1)  # -1 means loop indefinitely
+    if os.path.exists("sounds/bg_music.mp3"):
+        pygame.mixer.music.load("sounds/bg_music.mp3")
+        pygame.mixer.music.set_volume(0.35)
+        pygame.mixer.music.play(-1)
 except Exception as e:
     print("Could not load background music:", e)
 
 # -------------------------------------------------------------
-# EDGE-TTS BACKGROUND WORKER & AUDIO PLAYER
+# EDGE-TTS NEURAL ANNOUNCER ENGINE
 # -------------------------------------------------------------
-# Voice options: "en-US-ChristopherNeural" (Deep Announcer), "en-US-GuyNeural", "en-US-EricNeural"
 VOICE = "en-US-ChristopherNeural"
 
-def trigger_announcer(text):
-    """
-    Generates dynamic TTS audio in a separate thread so the Pygame loop
-    does not freeze. Plays the audio as soon as it's ready.
-    """
-    def run_async_tts():
-        async def fetch_and_play():
-            filename = "announcer_temp.mp3"
-            # Generate audio stream from edge-tts
-            communicate = edge_tts.Communicate(text, "en-US-ChristopherNeural")
-            await communicate.save(filename)
-            
-            # Play generated sound on Pygame's audio channel
-            pygame.mixer.Sound(filename).play()
+def speak_announcer_async(text, duck_volume=True):
+    """Generates non-blocking Edge-TTS announcer voice lines."""
+    def run_worker():
+        filename = os.path.join(AUDIO_DIR, f"tts_{int(time.time() * 1000)}_{random.randint(100, 999)}.mp3")
+        
+        async def generate():
+            try:
+                communicate = edge_tts.Communicate(text, VOICE)
+                await communicate.save(filename)
+                return True
+            except Exception as ex:
+                return False
 
-        asyncio.run(fetch_and_play())
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            success = loop.run_until_complete(generate())
+            loop.close()
 
-    # Daemon thread ensures the thread exits when the main game closes
-    threading.Thread(target=run_async_tts, daemon=True).start()
+            if success and os.path.exists(filename):
+                if duck_volume and pygame.mixer.music.get_busy():
+                    pygame.mixer.music.set_volume(0.12)
+                
+                speech_sound = pygame.mixer.Sound(filename)
+                speech_sound.set_volume(1.0)
+                channel = pygame.mixer.Channel(1)
+                channel.play(speech_sound)
 
-def speak_text_async(text, channel_id=1):
-    """Fires edge-tts synthesis in a non-blocking background thread."""
-    threading.Thread(target=_generate_and_play, args=(text, channel_id), daemon=True).start()
+                # Wait until audio finishes to restore background music volume
+                while channel.get_busy():
+                    time.sleep(0.1)
 
-def _generate_and_play(text, channel_id):
-    async def _tts_task():
-        filename = os.path.join(AUDIO_DIR, f"announcer_{int(time.time() * 1000)}.mp3")
-        communicate = edge_tts.Communicate(text, VOICE)
-        await communicate.save(filename)
-        return filename
+                if duck_volume:
+                    pygame.mixer.music.set_volume(0.35)
 
-    try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        mp3_file = loop.run_until_complete(_tts_task())
-        loop.close()
+                try:
+                    os.remove(filename)
+                except Exception:
+                    pass
+        except Exception as err:
+            print(f"[Announcer TTS Error]: {err}")
 
-        # Play generated audio via Pygame Channel
-        if os.path.exists(mp3_file):
-            speech_sound = pygame.mixer.Sound(mp3_file)
-            speech_sound.set_volume(1.0)
-            pygame.mixer.Channel(channel_id).play(speech_sound)
-    except Exception as err:
-        print(f"[edge-tts error]: {err}")
+    threading.Thread(target=run_worker, daemon=True).start()
+
 
 # -------------------------------------------------------------
+# SPRITE LOADER WITH ASPECT-PRESERVED SCALING
+# -------------------------------------------------------------
+def load_scaled_sprite(path, target_height):
+    """Loads an image, preserves aspect ratio to target_height, and prepares flipped version."""
+    try:
+        raw = pygame.image.load(path).convert_alpha()
+        w, h = raw.get_size()
+        scale_ratio = target_height / max(1, h)
+        target_w = max(1, int(w * scale_ratio))
+        scaled_r = pygame.transform.smoothscale(raw, (target_w, target_height))
+        scaled_l = pygame.transform.flip(scaled_r, True, False)
+        return scaled_r, scaled_l
+    except Exception as e:
+        # Fallback surface
+        w, h = int(target_height * 0.6), target_height
+        surf = pygame.Surface((w, h), pygame.SRCALPHA)
+        surf.fill((120, 120, 120, 180))
+        return surf, surf
 
-game_over = False
-winner_text = ""
-camera_shake = 0
-game_state = "menu" 
-previous_state = "fight" 
-intro_timer = 0       
 
-p1_name_input = ""
-p2_name_input = ""
-active_player_input = 1 
+def load_character_animations(base_dirs, target_height):
+    """
+    Loads animations from Front and Back sets.
+    State keys: idle, walk, attacking, jumping, blocking, hit, defeated, super
+    """
+    states_files = {
+        "idle": ["I1.png", "I2.png"],
+        "attacking": ["A1.png", "A2.png", "A3.png"],
+        "jumping": ["J1.png", "J2.png", "J3.png"],
+        "blocking": ["B1.png"],
+        "hit": ["Da1.png"],
+        "defeated": ["D1.png"],
+        "super": ["A1.png", "A2.png", "A3.png"]
+    }
 
-particles = [] 
-hit_flashes = [] 
+    # Resolve existing base directory
+    chosen_dir = None
+    for d in base_dirs:
+        if os.path.exists(d):
+            chosen_dir = d
+            break
 
+    anims = {}
+    for state, filenames in states_files.items():
+        front_frames_r = []
+        front_frames_l = []
+        back_frames_r = []
+        back_frames_l = []
 
-def load_animation_sequence(file_paths, target_width, target_height):
-    frames_right = []
-    frames_left = []
-    
-    for path in file_paths:
-        try:
-            raw = pygame.image.load(path).convert_alpha()
-            scaled_right = pygame.transform.scale(raw, (target_width, target_height))
-            scaled_left = pygame.transform.flip(scaled_right, True, False)
-            frames_right.append(scaled_right)
-            frames_left.append(scaled_left)
-        except Exception:
-            fallback = pygame.Surface((target_width, target_height))
-            fallback.fill((180, 180, 180))
-            frames_right.append(fallback)
-            frames_left.append(fallback)
+        for fname in filenames:
+            # Try Front
+            front_path = os.path.join(chosen_dir, "Front", fname) if chosen_dir else ""
+            if not os.path.exists(front_path) and chosen_dir:
+                front_path = os.path.join(chosen_dir, fname)
             
-    return {"right": frames_right, "left": frames_left}
+            # Try Back
+            back_path = os.path.join(chosen_dir, "Back", fname) if chosen_dir else ""
+            if not os.path.exists(back_path) and chosen_dir:
+                back_path = os.path.join(chosen_dir, "New folder", fname)
+            if not os.path.exists(back_path):
+                back_path = front_path
+
+            fr_r, fr_l = load_scaled_sprite(front_path, target_height)
+            bk_r, bk_l = load_scaled_sprite(back_path, target_height)
+
+            front_frames_r.append(fr_r)
+            front_frames_l.append(fr_l)
+            back_frames_r.append(bk_r)
+            back_frames_l.append(bk_l)
+
+        anims[state] = {
+            "front_right": front_frames_r,
+            "front_left": front_frames_l,
+            "back_right": back_frames_r,
+            "back_left": back_frames_l
+        }
+
+    return anims
 
 
+# -------------------------------------------------------------
+# FIGHTER CLASS
+# -------------------------------------------------------------
 class Fighter:
-    def __init__(self, x, y, name, color, saber_color, controls, anim_paths_dict, player_num=1):
+    def __init__(self, x, name, char_type, primary_color, secondary_color, controls, target_h=150, player_num=1):
+        self.char_type = char_type  # "ogre" or "princess"
         self.name = name
-        self.color = color
-        self.saber_color = saber_color
-        self.controls = controls 
+        self.primary_color = primary_color
+        self.secondary_color = secondary_color
+        self.controls = controls
         self.player_num = player_num
+        self.target_h = target_h
         
-        self.w, self.h = 75, 125
+        # Logical Push Box (body collision separate from sprite bounds)
+        self.push_w = 52 if char_type == "princess" else 60
+        self.push_h = target_h
         self.x = x
-        self.y = y
+        self.y = FLOOR_Y - self.push_h
         self.vx = 0
         self.vy = 0
         self.is_jumping = False
         
-        self.hp = 100
+        # Combat Stats
         self.max_hp = 100
-        self.display_hp = 100  
+        self.hp = 100
+        self.display_hp = 100
+        self.super_meter = 0
+        self.max_super = 100
+        self.rounds_won = 0
         
-        self.state = "idle" 
+        self.state = "idle"  # idle, walk, attacking, jumping, blocking, hit, defeated, dashing, super
         self.state_timer = 0
-        self.facing = "right"
+        self.combo_count = 0
+        self.combo_timer = 0
+        self.facing = "right" if player_num == 1 else "left"
         self.dash_cooldown = 0
-        self.has_hit_target = False 
+        self.has_hit_target = False
         
+        # Animation
         self.anim_frame = 0.0
-        self.anim_speed = 0.12 
-        
-        self.animations = {}
-        for state_key, paths in anim_paths_dict.items():
-            self.animations[state_key] = load_animation_sequence(paths, self.w, self.h)
+        self.anim_speed = 0.09
+
+        # Load Animation Assets
+        asset_folders = ["Images1", "Ogre"] if char_type == "ogre" else ["Images2", "Princess"]
+        self.animations = load_character_animations(asset_folders, self.target_h)
+
+    @property
+    def center_x(self):
+        return self.x + self.push_w / 2
+
+    def reset_for_round(self, x_pos):
+        self.x = x_pos
+        self.y = FLOOR_Y - self.push_h
+        self.vx = 0
+        self.vy = 0
+        self.hp = self.max_hp
+        self.display_hp = self.max_hp
+        self.state = "idle"
+        self.state_timer = 0
+        self.is_jumping = False
+        self.dash_cooldown = 0
+        self.has_hit_target = False
+        self.anim_frame = 0.0
+        self.facing = "right" if self.player_num == 1 else "left"
 
     def update(self, keys, opponent):
-        self.facing = "right" if self.x < opponent.x else "left"
-        
+        # 1. Stable Facing Direction (with 12px dead zone threshold)
+        center_diff = opponent.center_x - self.center_x
+        if abs(center_diff) > 12:
+            if self.state not in ["dashing", "super"]:
+                self.facing = "right" if center_diff > 0 else "left"
+
         if self.dash_cooldown > 0:
             self.dash_cooldown -= 1
 
-        if self.state != "dashing":
-            self.vx *= FRICTION
+        if self.combo_timer > 0:
+            self.combo_timer -= 1
+            if self.combo_timer == 0:
+                self.combo_count = 0
 
+        # Natural friction (lighter in mid-air for natural jump arc)
+        if self.state != "dashing":
+            self.vx *= 0.94 if self.is_jumping else FRICTION
+
+        # 2. State Timers
         if self.state_timer > 0:
             self.state_timer -= 1
             if self.state_timer == 0:
+                if self.state in ["attacking", "hit", "dashing", "super"]:
+                    self.state = "idle"
+                    self.anim_frame = 0
+                    self.has_hit_target = False
+
+        # 3. Read Player Controls
+        is_left = bool(keys[self.controls["left"]])
+        is_right = bool(keys[self.controls["right"]])
+        is_jump = bool(keys[self.controls["jump"]])
+        is_block = bool(keys[self.controls["block"]])
+
+        # 4. Guard Logic
+        if self.state == "blocking":
+            if not is_block:
                 self.state = "idle"
                 self.anim_frame = 0
-                self.has_hit_target = False
 
-        if self.state == "blocking" and not keys[self.controls["block"]]:
-            self.state = "idle"
-            self.anim_frame = 0
-
-        if self.state in ["idle", "jumping", "blocking"]:
-            if keys[self.controls["block"]]:
+        # 5. Movement and Jump Input Handling
+        if self.state in ["idle", "walk", "jumping", "blocking"]:
+            if is_block and not self.is_jumping:
                 if self.state != "blocking":
                     self.anim_frame = 0
                 self.state = "blocking"
-                self.vx = 0 
+                self.vx *= 0.82
             else:
-                if keys[self.controls["left"]]:  self.vx = -6.5
-                if keys[self.controls["right"]]: self.vx = 6.5
-                
-                if keys[self.controls["jump"]] and not self.is_jumping:
-                    self.vy = -16
+                speed = 6.0 if self.char_type == "princess" else 5.4
+
+                # Simultaneous opposite inputs
+                if is_left and is_right:
+                    self.vx = 0
+                elif is_left:
+                    self.vx = -speed
+                elif is_right:
+                    self.vx = speed
+
+                if is_jump and not self.is_jumping:
+                    self.vy = -16.5
                     self.is_jumping = True
                     self.state = "jumping"
                     self.anim_frame = 0
 
+        # 6. Walk vs Idle State Transition
+        if not self.is_jumping and self.state in ["idle", "walk"]:
+            if abs(self.vx) > 0.8:
+                if self.state != "walk":
+                    self.state = "walk"
+                    self.anim_speed = 0.16
+            else:
+                if self.state != "idle":
+                    self.state = "idle"
+                    self.anim_frame = 0
+                    self.anim_speed = 0.09
+
+        # 7. Gravity & Floor Boundary
         self.x += self.vx
         self.y += self.vy
-        
-        if self.y < FLOOR_Y - self.h:
+
+        if self.y < FLOOR_Y - self.push_h:
             self.vy += GRAVITY
         else:
-            self.y = FLOOR_Y - self.h
+            self.y = FLOOR_Y - self.push_h
             self.vy = 0
             self.is_jumping = False
-            if self.state == "jumping": 
-                self.state = "idle"
+            if self.state == "jumping":
+                self.state = "walk" if abs(self.vx) > 0.8 else "idle"
+                self.anim_frame = 0
 
-        if self.x < 20: self.x = 20
-        if self.x > WIDTH - self.w - 20: self.x = WIDTH - self.w - 20
+        # 8. Arena Wall Clamp
+        min_x = 30
+        max_x = WIDTH - 30 - self.push_w
+        if self.x < min_x:
+            self.x = min_x
+        if self.x > max_x:
+            self.x = max_x
 
+        # 9. Smooth Health Bar Lag
         if self.display_hp > self.hp:
-            self.display_hp -= 0.5
+            self.display_hp -= 0.6
+            if self.display_hp < self.hp:
+                self.display_hp = self.hp
 
         self.anim_frame += self.anim_speed
 
     def attack(self):
-        if self.state in ["idle", "jumping"]:
+        if self.state in ["idle", "walk", "jumping"]:
             self.state = "attacking"
-            self.state_timer = 28 
+            self.state_timer = 26
             self.anim_frame = 0
             self.has_hit_target = False
-            self.vx = 5 if self.facing == "right" else -5 
+            lunge = 6 if self.char_type == "princess" else 7
+            self.vx = lunge if self.facing == "right" else -lunge
 
-    def force_dash(self, keys):
-        if self.dash_cooldown == 0 and self.state in ["idle", "jumping"]:
-            dash_dir = 0
-            if keys[self.controls["left"]]:    dash_dir = -1
-            elif keys[self.controls["right"]]: dash_dir = 1
-            else: dash_dir = 1 if self.facing == "right" else -1
+    def super_attack(self):
+        if self.super_meter >= self.max_super and self.state in ["idle", "walk", "jumping"]:
+            self.super_meter = 0
+            self.state = "super"
+            self.state_timer = 36
+            self.anim_frame = 0
+            self.has_hit_target = False
+            self.vx = 14 if self.facing == "right" else -14
+            return True
+        return False
+
+    def dash(self, keys, particles_list):
+        if self.dash_cooldown == 0 and self.state in ["idle", "walk", "jumping"]:
+            dir = 0
+            is_left = bool(keys[self.controls["left"]])
+            is_right = bool(keys[self.controls["right"]])
+
+            if is_left and not is_right:
+                dir = -1
+            elif is_right and not is_left:
+                dir = 1
+            else:
+                dir = 1 if self.facing == "right" else -1
 
             self.state = "dashing"
-            self.state_timer = 10
+            self.state_timer = 12
             self.anim_frame = 0
-            self.vx = dash_dir * 20
-            self.dash_cooldown = 50  
+            self.vx = dir * 21
+            self.dash_cooldown = 45
 
-            for _ in range(8):
-                particles.append([
-                    self.x + self.w // 2, 
-                    self.y + self.h // 2, 
-                    random.uniform(-2, 2), 
-                    random.uniform(-2, 2), 
-                    self.saber_color, 
-                    180, 
-                    random.randint(4, 7)
+            # Spawn Dash Energy Ghost Trail
+            for _ in range(10):
+                particles_list.append([
+                    self.center_x + random.uniform(-10, 10),
+                    self.y + self.push_h // 2 + random.uniform(-20, 20),
+                    random.uniform(-3, 3),
+                    random.uniform(-2, 2),
+                    self.primary_color,
+                    220,
+                    random.randint(5, 8)
                 ])
 
     def draw(self, surface):
-        fx, fy = self.x, self.y
-        fw, fh = self.w, self.h
-        center_x = fx + fw // 2
+        center_x = self.center_x
+        floor_ground = FLOOR_Y
 
-        shadow_w = max(12, fw + 16 - (abs(FLOOR_Y - (fy + fh)) // 3))
-        pygame.draw.ellipse(surface, (15, 12, 10), (center_x - shadow_w // 2, FLOOR_Y - 4, shadow_w, 8))
+        # 1. Ground Shadow (dynamic sizing based on altitude)
+        altitude = max(0, floor_ground - (self.y + self.push_h))
+        shadow_w = max(16, int((self.push_w + 30) * (1.0 - min(0.7, altitude / 200))))
+        shadow_h = max(6, int(10 * (1.0 - min(0.7, altitude / 200))))
+        shadow_surf = pygame.Surface((shadow_w, shadow_h), pygame.SRCALPHA)
+        pygame.draw.ellipse(shadow_surf, (10, 8, 14, 160), (0, 0, shadow_w, shadow_h))
+        surface.blit(shadow_surf, (center_x - shadow_w // 2, floor_ground - shadow_h // 2))
 
+        # 2. Determine Animation State & Frame
         current_anim_key = self.state if self.state in self.animations else "idle"
-        frames = self.animations[current_anim_key][self.facing]
+        
+        dir_key = f"front_{self.facing}"
+        if dir_key not in self.animations[current_anim_key]:
+            dir_key = f"front_right"
+            
+        frames = self.animations[current_anim_key][dir_key]
 
-        if self.state == "defeated":
-            total_dur = 45 
+        if self.state == "jumping":
+            if self.vy < -4:
+                frame_idx = 0
+            elif -4 <= self.vy <= 4:
+                frame_idx = min(1, len(frames) - 1)
+            else:
+                frame_idx = min(2, len(frames) - 1)
+        elif self.state == "defeated":
+            total_dur = 45
             progress = 1.0 - (max(0, self.state_timer) / total_dur)
             frame_idx = min(int(progress * len(frames)), len(frames) - 1)
-        elif len(frames) > 1 and self.state_timer > 0:
-            total_duration = 28 if self.state == "attacking" else (28 if self.state == "hit" else 10)
+        elif self.state in ["attacking", "super", "hit"]:
+            total_duration = 36 if self.state == "super" else (26 if self.state == "attacking" else 20)
             progress = 1.0 - max(0, self.state_timer / total_duration)
             frame_idx = min(int(progress * len(frames)), len(frames) - 1)
         else:
             frame_idx = int(self.anim_frame) % len(frames)
 
         current_sprite = frames[frame_idx]
-        surface.blit(current_sprite, (fx, fy))
+        spr_w, spr_h = current_sprite.get_size()
 
+        # Align Feet with Physics Position (lifts off floor during jump)
+        draw_x = center_x - spr_w // 2
+        draw_y = (self.y + self.push_h) - spr_h
 
-def process_combat_collisions(p1, p2):
-    global camera_shake
-    
-    if p1.state == "attacking" and (3 <= p1.state_timer <= 14) and not p1.has_hit_target:
-        reach = 75
-        hx = p1.x + p1.w if p1.facing == "right" else p1.x - reach
-        hy = p1.y + 20
+        # Forward shift during attacks so reach feels impactful
+        if self.state in ["attacking", "super"]:
+            reach_shift = 14 if self.char_type == "princess" else 18
+            draw_x += reach_shift if self.facing == "right" else -reach_shift
 
-        if pygame.Rect(hx, hy, reach, 45).colliderect(pygame.Rect(p2.x, p2.y, p2.w, p2.h)):
-            p1.has_hit_target = True 
+        # Blit Character Sprite
+        surface.blit(current_sprite, (draw_x, draw_y))
+
+        # Guard Barrier / Energy Shield Visual
+        if self.state == "blocking":
+            pulse = math.sin(pygame.time.get_ticks() * 0.012) * 0.15 + 0.85
+            shield_w = int(48 * pulse)
+            shield_h = int((self.push_h * 1.1) * pulse)
+            shield_surf = pygame.Surface((shield_w + 30, shield_h + 30), pygame.SRCALPHA)
             
-            if p2.state == "blocking":
-                p2.vx = 5 if p1.facing == "right" else -5  
-                camera_shake = 4
-                for _ in range(6):
-                    particles.append([
-                        p2.x + p2.w // 2, p2.y + p2.h // 2, 
-                        random.uniform(-4, 4), random.uniform(-4, 4), 
-                        (255, 255, 255), 200, 4
-                    ])
-            else:
-                p2.hp -= 15
-                p2.state = "hit"
-                p2.state_timer = 28 
-                p2.anim_frame = 0
-                p2.vx = 11 if p1.facing == "right" else -11
-                camera_shake = 12 
-
-                hit_flashes.append([hx + reach // 2, hy + 20, 12, 8])
-
-                for _ in range(14):
-                    particles.append([
-                        p2.x + p2.w // 2, p2.y + p2.h // 2, 
-                        random.uniform(-6, 6), random.uniform(-8, -1), 
-                        p1.saber_color, 255, random.randint(3, 5)
-                    ])
+            shield_x = (self.x + self.push_w - 6) if self.facing == "right" else (self.x - shield_w - 18)
+            shield_y = int(self.y + (self.push_h - shield_h) / 2 - 15)
+            
+            # Outer Ambient Aura
+            pygame.draw.ellipse(shield_surf, (*self.primary_color, int(65 * pulse)), (0, 0, shield_w + 30, shield_h + 30))
+            # Core Energy Forcefield
+            pygame.draw.ellipse(shield_surf, (*self.primary_color, int(150 * pulse)), (15, 15, shield_w, shield_h))
+            # White Neon Outer Arc
+            pygame.draw.ellipse(shield_surf, (255, 255, 255, int(230 * pulse)), (15, 15, shield_w, shield_h), 3)
+            # Tech Inner Energy Arc
+            pygame.draw.ellipse(shield_surf, (255, 255, 255, int(160 * pulse)), (23, 23, max(8, shield_w - 16), max(16, shield_h - 16)), 1)
+            
+            surface.blit(shield_surf, (shield_x, shield_y))
 
 
-def draw_cyber_background(surface):
-    if bg_image:
-        surface.blit(bg_image, (0, 0))
+# -------------------------------------------------------------
+# PUSH BOX COLLISION RESOLUTION (PREVENT PASS-THROUGH)
+# -------------------------------------------------------------
+def resolve_fighter_body_collision(f1, f2):
+    """Resolves grounded horizontal push-box intersection to prevent fighters passing through each other."""
+    f1_bottom = f1.y + f1.push_h
+    f2_bottom = f2.y + f2.push_h
+    f1_top = f1.y
+    f2_top = f2.y
+
+    # Cross-up clearance: allow aerial passage if one fighter jumps over the other
+    is_high_jump_cross = (f1_bottom < f2_top + 35) or (f2_bottom < f1_top + 35)
+    if is_high_jump_cross:
+        return
+
+    left_f = f1 if f1.center_x <= f2.center_x else f2
+    right_f = f2 if f1.center_x <= f2.center_x else f1
+
+    overlap = (left_f.x + left_f.push_w) - right_f.x
+
+    if overlap > 0:
+        half_overlap = overlap / 2.0
+        left_f.x -= half_overlap
+        right_f.x += half_overlap
+
+        min_x = 30
+        max_x = WIDTH - 30
+
+        if left_f.x < min_x:
+            wall_push = min_x - left_f.x
+            left_f.x = min_x
+            right_f.x = min(max_x - right_f.push_w, right_f.x + wall_push)
+        if right_f.x + right_f.push_w > max_x:
+            wall_push = (right_f.x + right_f.push_w) - max_x
+            right_f.x = max_x - right_f.push_w
+            left_f.x = max(min_x, left_f.x - wall_push)
+
+        if left_f.x + left_f.push_w > right_f.x:
+            right_f.x = left_f.x + left_f.push_w
+
+
+# -------------------------------------------------------------
+# COMBAT ENGINE & HIT DETECTION
+# -------------------------------------------------------------
+def process_combat(attacker, defender, particles, hit_flashes):
+    """Evaluates attacks, damage calculations, block mitigations, and super moves."""
+    shake_amount = 0
+    hit_event = None
+
+    is_super = attacker.state == "super"
+    is_atk = attacker.state == "attacking"
+
+    if (is_atk or is_super) and not attacker.has_hit_target:
+        # Check active attack frame window
+        active_window = (4 <= attacker.state_timer <= 18) if is_atk else (4 <= attacker.state_timer <= 28)
+        
+        if active_window:
+            reach = 90 if is_super else 75
+            # 10px body overlap ensures point-blank strikes connect reliably
+            hx = (attacker.x + attacker.push_w - 10) if attacker.facing == "right" else (attacker.x - reach + 10)
+            hy = attacker.y + 20
+            hitbox = pygame.Rect(hx, hy, reach, 55)
+            hurtbox = pygame.Rect(defender.x + 4, defender.y + 4, defender.push_w - 8, defender.push_h - 8)
+
+            if hitbox.colliderect(hurtbox):
+                attacker.has_hit_target = True
+                
+                # Attacker gains super meter
+                attacker.super_meter = min(attacker.max_super, attacker.super_meter + (15 if is_super else 22))
+
+                if defender.state == "blocking":
+                    # Full block against normal attacks, minor chip damage against super
+                    damage = 4 if is_super else 0
+                    defender.hp = max(0, defender.hp - damage)
+                    defender.vx = (12 if is_super else 8) if attacker.facing == "right" else (-12 if is_super else -8)
+                    shake_amount = 6 if is_super else 3
+                    hit_event = "BLOCKED!"
+
+                    # Shield Impact Flash Ring
+                    flash_x = (defender.x - 5) if attacker.facing == "right" else (defender.x + defender.push_w + 5)
+                    hit_flashes.append([flash_x, defender.y + defender.push_h // 2, 12, 8])
+
+                    # Electric Shield Sparks
+                    for _ in range(14):
+                        particles.append([
+                            defender.center_x,
+                            defender.y + defender.push_h // 2,
+                            random.uniform(-6, 6),
+                            random.uniform(-5, 5),
+                            CYAN_ACCENT,
+                            240,
+                            random.randint(4, 7)
+                        ])
+                else:
+                    # Clean Hit
+                    damage = 32 if is_super else 16
+                    defender.hp = max(0, defender.hp - damage)
+                    defender.state = "hit"
+                    defender.state_timer = 22
+                    defender.anim_frame = 0
+                    
+                    knockback = 15 if is_super else 10
+                    defender.vx = knockback if attacker.facing == "right" else -knockback
+                    defender.vy = -5 if is_super else -2
+                    
+                    shake_amount = 14 if is_super else 8
+                    
+                    # Combo Tracking
+                    attacker.combo_count += 1
+                    attacker.combo_timer = 60
+                    hit_event = "SUPER HIT!" if is_super else ("COMBO!" if attacker.combo_count > 1 else "HIT!")
+
+                    # Impact Ring Flash
+                    hit_flashes.append([hx + reach // 2, hy + 25, 14, 10])
+
+                    # Blood / Hit Energy Sparks
+                    spark_color = GOLD if is_super else attacker.primary_color
+                    for _ in range(16 if is_super else 12):
+                        particles.append([
+                            defender.center_x,
+                            defender.y + defender.push_h // 2,
+                            random.uniform(-7, 7),
+                            random.uniform(-8, -1),
+                            spark_color,
+                            255,
+                            random.randint(3, 6)
+                        ])
+
+    return shake_amount, hit_event
+
+
+# -------------------------------------------------------------
+# MATCH CONTROLLER & GLOBALS
+# -------------------------------------------------------------
+p1 = None
+p2 = None
+game_state = "menu"  # "menu", "name_input", "round_intro", "fight", "round_over", "match_over", "paused"
+previous_state = "fight"
+
+round_num = 1
+max_rounds = 3  # Best of 3 (first to 2 wins)
+match_time_remaining = 99.0
+time_over_handled = False
+intro_timer = 0
+round_banner_text = ""
+match_winner = None
+
+camera_shake = 0
+particles = []
+hit_flashes = []
+
+p1_name_input = "OGRE"
+p2_name_input = "PRINCESS"
+active_player_input = 1
+
+# UI Buttons
+start_btn = pygame.Rect(WIDTH // 2 - 140, HEIGHT // 2 + 55, 280, 48)
+how_to_btn = pygame.Rect(WIDTH // 2 - 140, HEIGHT // 2 + 115, 280, 42)
+
+resume_btn = pygame.Rect(WIDTH // 2 - 130, HEIGHT // 2 - 60, 260, 42)
+restart_btn = pygame.Rect(WIDTH // 2 - 130, HEIGHT // 2 - 5, 260, 42)
+home_btn = pygame.Rect(WIDTH // 2 - 130, HEIGHT // 2 + 50, 260, 42)
+
+
+def start_new_match():
+    global p1, p2, round_num, match_winner, game_state, intro_timer, match_time_remaining, time_over_handled
+    
+    p1_binds = {
+        "left": pygame.K_a,
+        "right": pygame.K_d,
+        "jump": pygame.K_w,
+        "block": pygame.K_s,
+        "attack": pygame.K_g,
+        "dash": pygame.K_LSHIFT,
+        "super": pygame.K_f
+    }
+    
+    p2_binds = {
+        "left": pygame.K_LEFT,
+        "right": pygame.K_RIGHT,
+        "jump": pygame.K_UP,
+        "block": pygame.K_DOWN,
+        "attack": pygame.K_l,
+        "dash": pygame.K_RCTRL,
+        "super": pygame.K_k
+    }
+
+    n1 = p1_name_input.strip().upper() if p1_name_input.strip() else "OGRE"
+    n2 = p2_name_input.strip().upper() if p2_name_input.strip() else "PRINCESS"
+
+    p1 = Fighter(160, n1, "ogre", OGRE_GREEN, GOLD, p1_binds, target_h=155, player_num=1)
+    p2 = Fighter(WIDTH - 220, n2, "princess", PRINCESS_PINK, CYAN_ACCENT, p2_binds, target_h=145, player_num=2)
+    
+    round_num = 1
+    match_winner = None
+    start_round(1)
+
+
+def start_round(r_num):
+    global round_num, game_state, intro_timer, match_time_remaining, time_over_handled, round_banner_text
+    round_num = r_num
+    p1.reset_for_round(160)
+    p2.reset_for_round(WIDTH - 220)
+    match_time_remaining = 99.0
+    time_over_handled = False
+    game_state = "round_intro"
+    intro_timer = 90
+    
+    if round_num == 3:
+        round_banner_text = "FINAL ROUND"
+        speak_announcer_async(f"Final Round! {p1.name} versus {p2.name}! Fight for your life!")
     else:
-        surface.fill((15, 12, 24))
+        round_banner_text = f"ROUND {round_num}"
+        speak_announcer_async(f"Round {round_num}! {p1.name} versus {p2.name}! Fight!")
 
 
-def reset_match():
-    global p1, p2, game_over, winner_text
+# Initialize First Match Configuration
+start_new_match()
+game_state = "menu"
 
-    if pygame.mixer.get_init():
-        pygame.mixer.music.set_volume(0.3)
 
-    p1_binds = {"left": pygame.K_a, "right": pygame.K_d, "jump": pygame.K_w, "block": pygame.K_s}
-    p2_binds = {"left": pygame.K_LEFT, "right": pygame.K_RIGHT, "jump": pygame.K_UP, "block": pygame.K_DOWN}
+# -------------------------------------------------------------
+# HUD & UI RENDERING HELPERS
+# -------------------------------------------------------------
+def draw_tekken_hud(surface):
+    bar_w, bar_h = 350, 24
+    top_y = 26
+
+    # --- P1 HEALTH BAR (Top Left) ---
+    p1_x = 40
+    # Container Glow
+    pygame.draw.rect(surface, (0, 80, 40), (p1_x - 3, top_y - 3, bar_w + 6, bar_h + 6), border_radius=5)
+    pygame.draw.rect(surface, OGRE_GREEN, (p1_x - 2, top_y - 2, bar_w + 4, bar_h + 4), 2, border_radius=4)
+    pygame.draw.rect(surface, BLACK, (p1_x, top_y, bar_w, bar_h), border_radius=3)
     
-    name_1 = p1_name_input.strip().upper() if p1_name_input.strip() else "PLAYER 1"
-    name_2 = p2_name_input.strip().upper() if p2_name_input.strip() else "PLAYER 2"
+    # Lagging Red Damage Bar
+    if p1.display_hp > 0:
+        red_w = int(bar_w * (p1.display_hp / p1.max_hp))
+        pygame.draw.rect(surface, RED_DAMAGE, (p1_x, top_y, red_w, bar_h), border_radius=3)
+    # Active Green Health Bar
+    if p1.hp > 0:
+        hp_w = int(bar_w * (p1.hp / p1.max_hp))
+        pygame.draw.rect(surface, OGRE_GREEN, (p1_x, top_y, hp_w, bar_h), border_radius=3)
+        # Highlight Top Edge
+        pygame.draw.line(surface, (200, 255, 220), (p1_x, top_y + 1), (p1_x + hp_w, top_y + 1), 2)
 
-    p1_anims = {
-        "idle": ["Images1/Front/I2.png"],
-        "attacking": ["Images1/Front/A1.png", "Images1/Front/A2.png", "Images1/Front/A3.png"],
-        "jumping": ["Images1/Front/J1.png", "Images1/Front/J2.png", "Images1/Front/J3.png"],
-        "blocking": ["Images1/Front/B1.png"],
-        "hit": ["Images1/Front/Da1.png"],
-        "defeated": ["Images1/Front/D1.png"]
-    }
-
-    p2_anims = {
-        "idle": ["Images2/Front/I1.png", "Images2/Front/I1.png"],
-        "attacking": ["Images2/Front/A1.png", "Images2/Front/A2.png", "Images2/Front/A3.png"],
-        "jumping": ["Images2/Front/J1.png", "Images2/Front/J2.png", "Images2/Front/J3.png"],
-        "blocking": ["Images2/Front/B1.png"],
-        "hit": ["Images2/Front/Da1.png"],
-        "defeated": ["Images2/Front/D1.png"]
-    }
-
-    p1 = Fighter(180, FLOOR_Y - 86, name_1, NEON_CYAN, NEON_CYAN, p1_binds, p1_anims, player_num=1)
-    p2 = Fighter(WIDTH - 222, FLOOR_Y - 86, name_2, NEON_MAGENTA, NEON_MAGENTA, p2_binds, p2_anims, player_num=2)
-    game_over = False
-    winner_text = ""
-
-
-reset_match()
-start_btn = pygame.Rect(WIDTH // 2 - 120, HEIGHT // 2 + 50, 240, 46)
-
-resume_btn = pygame.Rect(WIDTH // 2 - 120, HEIGHT // 2 - 60, 240, 42)
-restart_btn = pygame.Rect(WIDTH // 2 - 120, HEIGHT // 2 - 5, 240, 42)
-home_btn = pygame.Rect(WIDTH // 2 - 120, HEIGHT // 2 + 50, 240, 42)
-
-# --- MAIN GAME LOOP ---
-while True:
-    clock.tick(60)
+    # P1 Name & Round Win Orbs
+    p1_lbl = font_hud.render(p1.name, True, WHITE)
+    surface.blit(p1_lbl, (p1_x, top_y + bar_h + 6))
     
-    render_offset_x = random.randint(-camera_shake, camera_shake) if camera_shake > 0 else 0
-    render_offset_y = random.randint(-camera_shake, camera_shake) if camera_shake > 0 else 0
-    if camera_shake > 0 and game_state != "paused": camera_shake -= 1
+    # Round Indicators (Tekken Style Stars)
+    for i in range(2):
+        orb_x = p1_x + 180 + i * 22
+        orb_y = top_y + bar_h + 16
+        is_won = p1.rounds_won > i
+        pygame.draw.circle(surface, GOLD if is_won else DARK_PANEL, (orb_x, orb_y), 7)
+        pygame.draw.circle(surface, WHITE if is_won else BORDER_COLOR, (orb_x, orb_y), 7, 2)
 
-    display_surface = pygame.Surface((WIDTH, HEIGHT))
-    draw_cyber_background(display_surface)
+    # P1 Super Gauge (Bottom Left)
+    sup_x, sup_y, sup_w, sup_h = 40, HEIGHT - 32, 220, 14
+    pygame.draw.rect(surface, DARK_PANEL, (sup_x, sup_y, sup_w, sup_h), border_radius=4)
+    pygame.draw.rect(surface, BORDER_COLOR, (sup_x, sup_y, sup_w, sup_h), 1, border_radius=4)
+    cur_sup_w = int(sup_w * (p1.super_meter / p1.max_super))
+    if cur_sup_w > 0:
+        super_col = SUPER_ORANGE if p1.super_meter >= p1.max_super else CYAN_ACCENT
+        pygame.draw.rect(surface, super_col, (sup_x, sup_y, cur_sup_w, sup_h), border_radius=4)
+    sup_text = "SUPER READY! [F]" if p1.super_meter >= p1.max_super else f"SUPER {int(p1.super_meter)}%"
+    s_lbl = font_small.render(sup_text, True, GOLD if p1.super_meter >= p1.max_super else SILVER)
+    surface.blit(s_lbl, (sup_x + 6, sup_y - 1))
 
+    # --- P2 HEALTH BAR (Top Right) ---
+    p2_x = WIDTH - 40 - bar_w
+    # Container Glow
+    pygame.draw.rect(surface, (100, 0, 50), (p2_x - 3, top_y - 3, bar_w + 6, bar_h + 6), border_radius=5)
+    pygame.draw.rect(surface, PRINCESS_PINK, (p2_x - 2, top_y - 2, bar_w + 4, bar_h + 4), 2, border_radius=4)
+    pygame.draw.rect(surface, BLACK, (p2_x, top_y, bar_w, bar_h), border_radius=3)
+    
+    # Lagging Red Damage Bar (anchored right)
+    if p2.display_hp > 0:
+        red_w = int(bar_w * (p2.display_hp / p2.max_hp))
+        pygame.draw.rect(surface, RED_DAMAGE, (p2_x + bar_w - red_w, top_y, red_w, bar_h), border_radius=3)
+    # Active Pink Health Bar (anchored right)
+    if p2.hp > 0:
+        hp_w = int(bar_w * (p2.hp / p2.max_hp))
+        pygame.draw.rect(surface, PRINCESS_PINK, (p2_x + bar_w - hp_w, top_y, hp_w, bar_h), border_radius=3)
+        pygame.draw.line(surface, (255, 200, 230), (p2_x + bar_w - hp_w, top_y + 1), (p2_x + bar_w, top_y + 1), 2)
+
+    # P2 Name & Round Win Orbs
+    p2_lbl = font_hud.render(p2.name, True, WHITE)
+    surface.blit(p2_lbl, (p2_x + bar_w - p2_lbl.get_width(), top_y + bar_h + 6))
+
+    for i in range(2):
+        orb_x = p2_x + bar_w - 180 - i * 22
+        orb_y = top_y + bar_h + 16
+        is_won = p2.rounds_won > i
+        pygame.draw.circle(surface, GOLD if is_won else DARK_PANEL, (orb_x, orb_y), 7)
+        pygame.draw.circle(surface, WHITE if is_won else BORDER_COLOR, (orb_x, orb_y), 7, 2)
+
+    # P2 Super Gauge (Bottom Right)
+    sup2_x = WIDTH - 40 - sup_w
+    pygame.draw.rect(surface, DARK_PANEL, (sup2_x, sup_y, sup_w, sup_h), border_radius=4)
+    pygame.draw.rect(surface, BORDER_COLOR, (sup2_x, sup_y, sup_w, sup_h), 1, border_radius=4)
+    cur_sup2_w = int(sup_w * (p2.super_meter / p2.max_super))
+    if cur_sup2_w > 0:
+        super2_col = SUPER_ORANGE if p2.super_meter >= p2.max_super else PRINCESS_PINK
+        pygame.draw.rect(surface, super2_col, (sup2_x + sup_w - cur_sup2_w, sup_y, cur_sup2_w, sup_h), border_radius=4)
+    sup2_text = "SUPER READY! [K]" if p2.super_meter >= p2.max_super else f"SUPER {int(p2.super_meter)}%"
+    s2_lbl = font_small.render(sup2_text, True, GOLD if p2.super_meter >= p2.max_super else SILVER)
+    surface.blit(s2_lbl, (sup2_x + sup_w - s2_lbl.get_width() - 6, sup_y - 1))
+
+    # --- CENTER FIGHT TIMER & VS BADGE ---
+    timer_box = pygame.Rect(WIDTH // 2 - 38, top_y - 4, 76, 44)
+    pygame.draw.rect(surface, DARK_PANEL, timer_box, border_radius=6)
+    pygame.draw.rect(surface, GOLD, timer_box, 2, border_radius=6)
+    
+    display_sec = max(0, int(math.ceil(match_time_remaining - 1e-4)))
+    t_str = f"{display_sec:02d}"
+    t_surf = font_timer.render(t_str, True, RED_DAMAGE if display_sec <= 10 else WHITE)
+    surface.blit(t_surf, (WIDTH // 2 - t_surf.get_width() // 2, top_y - 2))
+
+    # Combo Counters
+    if p1.combo_count > 1 and p1.combo_timer > 0:
+        c1_surf = font_combo.render(f"{p1.combo_count} HITS!", True, GOLD)
+        surface.blit(c1_surf, (p1_x + 10, top_y + 60))
+    if p2.combo_count > 1 and p2.combo_timer > 0:
+        c2_surf = font_combo.render(f"{p2.combo_count} HITS!", True, GOLD)
+        surface.blit(c2_surf, (p2_x + bar_w - c2_surf.get_width() - 10, top_y + 60))
+
+    # Bottom Controls Guide
+    guide_bar = pygame.Surface((560, 16), pygame.SRCALPHA)
+    guide_bar.fill((14, 12, 22, 190))
+    surface.blit(guide_bar, (WIDTH // 2 - 280, HEIGHT - 18))
+    g_text = font_small.render("P1: [A/D] Move [W] Jump [S] Shield [G] Attack [F] Super  |  P2: [<-/->] Move [^] Jump [v] Shield [L] Attack [K] Super", True, SILVER)
+    surface.blit(g_text, (WIDTH // 2 - g_text.get_width() // 2, HEIGHT - 17))
+
+
+# -------------------------------------------------------------
+# MAIN GAME LOOP
+# -------------------------------------------------------------
+running = True
+
+while running:
+    dt = clock.tick(60) / 1000.0
+    if dt > 0.1:
+        dt = 0.1
     mouse_pos = pygame.mouse.get_pos()
 
+    # Camera Shake Effect
+    shake_x = random.randint(-camera_shake, camera_shake) if camera_shake > 0 else 0
+    shake_y = random.randint(-camera_shake, camera_shake) if camera_shake > 0 else 0
+    if camera_shake > 0 and game_state != "paused":
+        camera_shake -= 1
+
+    # Render Surface Creation
+    render_surf = pygame.Surface((WIDTH, HEIGHT))
+    
+    # 1. Background Arena
+    if bg_image:
+        render_surf.blit(bg_image, (0, 0))
+    else:
+        render_surf.fill(DARK_BG)
+        pygame.draw.rect(render_surf, (30, 28, 44), (0, FLOOR_Y, WIDTH, HEIGHT - FLOOR_Y))
+
+    # ---------------------------------------------------------
+    # EVENT HANDLING
+    # ---------------------------------------------------------
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
-            pygame.quit()
-            sys.exit()
+            running = False
 
-        if event.type == pygame.MOUSEBUTTONDOWN:
-            if game_state == "menu" and event.button == 1 and start_btn.collidepoint(mouse_pos):
-                game_state = "name_input"
-                active_player_input = 1
-                p1_name_input = ""
-                p2_name_input = ""
-            
-            elif game_state == "paused" and event.button == 1:
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            if game_state == "menu":
+                if start_btn.collidepoint(mouse_pos):
+                    game_state = "name_input"
+                    active_player_input = 1
+                    p1_name_input = p1.name
+                    p2_name_input = p2.name
+                elif how_to_btn.collidepoint(mouse_pos):
+                    start_new_match()
+
+            elif game_state == "paused":
                 if resume_btn.collidepoint(mouse_pos):
                     game_state = previous_state
                     pygame.mixer.music.unpause()
                 elif restart_btn.collidepoint(mouse_pos):
-                    reset_match()
-                    game_state = "level_intro"
-                    intro_timer = 90
+                    start_new_match()
                     pygame.mixer.music.play(-1)
                 elif home_btn.collidepoint(mouse_pos):
-                    reset_match()
                     game_state = "menu"
 
         if event.type == pygame.KEYDOWN:
+            # Menu Hotkeys
             if game_state == "name_input":
                 if event.key == pygame.K_RETURN:
                     if active_player_input == 1:
                         active_player_input = 2
                     elif active_player_input == 2:
-                        reset_match()
-                        game_state = "level_intro"
-                        intro_timer = 90
-                        pygame.mixer.music.set_volume(0.1)
-
-                        # TRIGGER NEURAL ANNOUNCER WITH DYNAMIC COMBATANT NAMES
-                        speak_text_async(f"{p1.name} versus {p2.name}! Fight!")
-
+                        p1.name = p1_name_input.strip().upper() if p1_name_input.strip() else "OGRE"
+                        p2.name = p2_name_input.strip().upper() if p2_name_input.strip() else "PRINCESS"
+                        start_new_match()
                 elif event.key == pygame.K_BACKSPACE:
                     if active_player_input == 1:
                         p1_name_input = p1_name_input[:-1]
@@ -441,8 +916,9 @@ while True:
                         elif active_player_input == 2 and len(p2_name_input) < 12:
                             p2_name_input += event.unicode
 
-            if event.key in [pygame.K_p, pygame.K_ESCAPE]:
-                if game_state in ["fight", "level_intro"]:
+            # Pause Controls
+            elif event.key in [pygame.K_p, pygame.K_ESCAPE]:
+                if game_state in ["fight", "round_intro", "round_over"]:
                     previous_state = game_state
                     game_state = "paused"
                     pygame.mixer.music.pause()
@@ -450,270 +926,307 @@ while True:
                     game_state = previous_state
                     pygame.mixer.music.unpause()
 
-            if game_state == "fight" and not game_over:
-                if event.key == pygame.K_g: p1.attack()
-                if event.key == pygame.K_LSHIFT: p1.force_dash(pygame.key.get_pressed())
+            # Fighting Controls
+            if game_state == "fight":
+                # Player 1 Actions
+                if event.key == p1.controls["attack"]:
+                    p1.attack()
+                elif event.key == p1.controls["dash"]:
+                    p1.dash(pygame.key.get_pressed(), particles)
+                elif event.key == p1.controls["super"]:
+                    if p1.super_attack():
+                        speak_announcer_async("Super Move Unleashed!")
+                        camera_shake = 16
 
-                if event.key == pygame.K_l: p2.attack()
-                if event.key == pygame.K_RCTRL: p2.force_dash(pygame.key.get_pressed())
+                # Player 2 Actions
+                if event.key == p2.controls["attack"]:
+                    p2.attack()
+                elif event.key == p2.controls["dash"]:
+                    p2.dash(pygame.key.get_pressed(), particles)
+                elif event.key == p2.controls["super"]:
+                    if p2.super_attack():
+                        speak_announcer_async("Super Move Unleashed!")
+                        camera_shake = 16
 
-            if event.key == pygame.K_r and game_over:
-                reset_match()
-                game_state = "level_intro"
-                intro_timer = 90
-                speak_text_async("Rematch initiated! Prepare for battle!")
+            # Match Over Shortcuts
+            if game_state == "match_over":
+                if event.key == pygame.K_r:
+                    start_new_match()
+                    speak_announcer_async("Rematch initiated! Fight!")
+                elif event.key == pygame.K_q:
+                    game_state = "menu"
 
-            if event.key == pygame.K_q and game_over:
-                reset_match()
-                game_state = "menu"
-
-    # 1. MENU SCREEN
+    # ---------------------------------------------------------
+    # STATE LOGIC & UPDATES
+    # ---------------------------------------------------------
+    
+    # 1. MAIN MENU STATE
     if game_state == "menu":
-        menu_mask = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-        menu_mask.fill((10, 8, 16, 210))
-        display_surface.blit(menu_mask, (0, 0))
+        # Dark Cyber Overlay
+        overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        overlay.fill((10, 8, 18, 220))
+        render_surf.blit(overlay, (0, 0))
 
-        # Pulsing text glow effect
-        glow_alpha = int(180 + 75 * abs((pygame.time.get_ticks() % 1000) - 500) / 500)
-        
-        title_glow = font_title.render("LIGHTSABER DUEL", True, NEON_CYAN)
-        title_glow.set_alpha(glow_alpha // 3)
-        title_obj = font_title.render("LIGHTSABER DUEL", True, WHITE)
+        # Title Glow & Typography
+        pulse = int(180 + 75 * math.sin(pygame.time.get_ticks() * 0.005))
+        title_sub_glow = font_title.render("TEKKEN BRAWL", True, OGRE_GREEN)
+        title_sub_glow.set_alpha(pulse // 3)
+        title_main = font_title.render("TEKKEN BRAWL", True, WHITE)
 
-        title_x = WIDTH // 2 - title_obj.get_width() // 2
-        title_y = HEIGHT // 2 - 110
+        t_x = WIDTH // 2 - title_main.get_width() // 2
+        t_y = HEIGHT // 2 - 140
+        render_surf.blit(title_sub_glow, (t_x - 3, t_y - 2))
+        render_surf.blit(title_sub_glow, (t_x + 3, t_y + 2))
+        render_surf.blit(title_main, (t_x, t_y))
 
-        display_surface.blit(title_glow, (title_x - 2, title_y - 2))
-        display_surface.blit(title_glow, (title_x + 2, title_y + 2))
-        display_surface.blit(title_obj, (title_x, title_y))
+        sub_msg = font_sub.render("OGRE  VS  PRINCESS : CHAMPIONSHIP ARENA", True, GOLD)
+        render_surf.blit(sub_msg, (WIDTH // 2 - sub_msg.get_width() // 2, t_y + 80))
 
-        sub_obj = font_sub.render("2-PLAYER VERSUS ARENA MODE", True, SILVER)
-        display_surface.blit(sub_obj, (WIDTH // 2 - sub_obj.get_width() // 2, HEIGHT // 2 - 40))
+        # Start Button
+        h_start = start_btn.collidepoint(mouse_pos)
+        pygame.draw.rect(render_surf, (0, 240, 120, 40) if h_start else DARK_PANEL, start_btn, border_radius=6)
+        pygame.draw.rect(render_surf, OGRE_GREEN if h_start else GOLD, start_btn, 2 if h_start else 1, border_radius=6)
+        btn1_txt = font_hud.render("ENTER TOURNAMENT", True, WHITE if not h_start else OGRE_GREEN)
+        render_surf.blit(btn1_txt, (start_btn.x + start_btn.width // 2 - btn1_txt.get_width() // 2, start_btn.y + 10))
 
-        is_hover = start_btn.collidepoint(mouse_pos)
-        
-        btn_bg = pygame.Surface((start_btn.width, start_btn.height), pygame.SRCALPHA)
-        btn_bg.fill((0, 243, 255, 30) if is_hover else (18, 16, 26, 200))
-        display_surface.blit(btn_bg, (start_btn.x, start_btn.y))
+        # Quick Play Button
+        h_quick = how_to_btn.collidepoint(mouse_pos)
+        pygame.draw.rect(render_surf, DARK_PANEL, how_to_btn, border_radius=6)
+        pygame.draw.rect(render_surf, PRINCESS_PINK if h_quick else SILVER, how_to_btn, 2 if h_quick else 1, border_radius=6)
+        btn2_txt = font_sub.render("QUICK MATCH [DEFAULT NAMES]", True, PRINCESS_PINK if h_quick else SILVER)
+        render_surf.blit(btn2_txt, (how_to_btn.x + how_to_btn.width // 2 - btn2_txt.get_width() // 2, how_to_btn.y + 11))
 
-        pygame.draw.rect(display_surface, WHITE if is_hover else GOLD, start_btn, 2 if is_hover else 1, border_radius=4)
-        
-        btn_txt = font_sub.render("ENTER THE ARENA", True, NEON_CYAN if is_hover else WHITE)
-        display_surface.blit(btn_txt, (start_btn.x + (start_btn.width // 2 - btn_txt.get_width() // 2), start_btn.y + (start_btn.height // 2 - btn_txt.get_height() // 2)))
+        # Control Guide Footer
+        guide1 = font_small.render("P1: [W,A,S,D] Move | [G] Strike | [L-Shift] Dash | [F] Super", True, SILVER)
+        guide2 = font_small.render("P2: [ARROWS] Move | [L] Strike | [R-Ctrl] Dash | [K] Super", True, SILVER)
+        render_surf.blit(guide1, (WIDTH // 2 - guide1.get_width() // 2, HEIGHT - 55))
+        render_surf.blit(guide2, (WIDTH // 2 - guide2.get_width() // 2, HEIGHT - 32))
 
-    # 2. NAME INPUT SCREEN
+    # 2. NAME INPUT / FIGHTER SELECT STATE
     elif game_state == "name_input":
-        input_mask = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-        input_mask.fill((10, 8, 16, 220))
-        display_surface.blit(input_mask, (0, 0))
+        overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        overlay.fill((10, 8, 18, 230))
+        render_surf.blit(overlay, (0, 0))
 
-        prompt_glow = font_splash.render("ENTER COMBATANT NAMES", True, GOLD)
-        prompt_glow.set_alpha(100)
-        prompt_title = font_splash.render("ENTER COMBATANT NAMES", True, WHITE)
-        
-        prompt_x = WIDTH // 2 - prompt_title.get_width() // 2
-        display_surface.blit(prompt_glow, (prompt_x - 1, 49))
-        display_surface.blit(prompt_title, (prompt_x, 50))
+        header = font_banner.render("CHOOSE COMBATANT NAMES", True, GOLD)
+        render_surf.blit(header, (WIDTH // 2 - header.get_width() // 2, 45))
 
-        # Blinking cursor character
-        show_cursor = (pygame.time.get_ticks() // 400) % 2 == 0
-        cursor_str = "|" if show_cursor else " "
+        cursor = "|" if (pygame.time.get_ticks() // 350) % 2 == 0 else " "
 
         # Player 1 Box
-        p1_box = pygame.Rect(WIDTH // 2 - 220, 150, 440, 50)
-        p1_border = NEON_CYAN if active_player_input == 1 else (60, 70, 90)
+        box1 = pygame.Rect(WIDTH // 2 - 220, 160, 440, 52)
+        b1_col = OGRE_GREEN if active_player_input == 1 else BORDER_COLOR
+        pygame.draw.rect(render_surf, DARK_PANEL, box1, border_radius=6)
+        pygame.draw.rect(render_surf, b1_col, box1, 2 if active_player_input == 1 else 1, border_radius=6)
         
-        p1_bg = pygame.Surface((p1_box.width, p1_box.height), pygame.SRCALPHA)
-        p1_bg.fill((0, 243, 255, 20) if active_player_input == 1 else (18, 16, 26, 180))
-        display_surface.blit(p1_bg, (p1_box.x, p1_box.y))
-
-        pygame.draw.rect(display_surface, p1_border, p1_box, 2 if active_player_input == 1 else 1, border_radius=6)
-        
-        p1_lbl = font_sub.render("PLAYER 1:", True, NEON_CYAN)
-        p1_txt = font_main.render(p1_name_input + (cursor_str if active_player_input == 1 else ""), True, WHITE)
-        display_surface.blit(p1_lbl, (p1_box.x - 100, p1_box.y + 14))
-        display_surface.blit(p1_txt, (p1_box.x + 15, p1_box.y + 10))
+        lbl1 = font_hud.render("PLAYER 1 (OGRE):", True, OGRE_GREEN)
+        render_surf.blit(lbl1, (box1.x, box1.y - 30))
+        txt1 = font_hud.render(p1_name_input + (cursor if active_player_input == 1 else ""), True, WHITE)
+        render_surf.blit(txt1, (box1.x + 16, box1.y + 12))
 
         # Player 2 Box
-        p2_box = pygame.Rect(WIDTH // 2 - 220, 240, 440, 50)
-        p2_border = NEON_MAGENTA if active_player_input == 2 else (60, 70, 90)
-        
-        p2_bg = pygame.Surface((p2_box.width, p2_box.height), pygame.SRCALPHA)
-        p2_bg.fill((255, 0, 110, 20) if active_player_input == 2 else (18, 16, 26, 180))
-        display_surface.blit(p2_bg, (p2_box.x, p2_box.y))
+        box2 = pygame.Rect(WIDTH // 2 - 220, 270, 440, 52)
+        b2_col = PRINCESS_PINK if active_player_input == 2 else BORDER_COLOR
+        pygame.draw.rect(render_surf, DARK_PANEL, box2, border_radius=6)
+        pygame.draw.rect(render_surf, b2_col, box2, 2 if active_player_input == 2 else 1, border_radius=6)
 
-        pygame.draw.rect(display_surface, p2_border, p2_box, 2 if active_player_input == 2 else 1, border_radius=6)
+        lbl2 = font_hud.render("PLAYER 2 (PRINCESS):", True, PRINCESS_PINK)
+        render_surf.blit(lbl2, (box2.x, box2.y - 30))
+        txt2 = font_hud.render(p2_name_input + (cursor if active_player_input == 2 else ""), True, WHITE)
+        render_surf.blit(txt2, (box2.x + 16, box2.y + 12))
 
-        p2_lbl = font_sub.render("PLAYER 2:", True, NEON_MAGENTA)
-        p2_txt = font_main.render(p2_name_input + (cursor_str if active_player_input == 2 else ""), True, WHITE)
-        display_surface.blit(p2_lbl, (p2_box.x - 100, p2_box.y + 14))
-        display_surface.blit(p2_txt, (p2_box.x + 15, p2_box.y + 10))
+        hint = font_sub.render("TYPE NAME AND PRESS ENTER TO CONFIRM", True, SILVER)
+        render_surf.blit(hint, (WIDTH // 2 - hint.get_width() // 2, 370))
 
-        hint_txt = font_sub.render("TYPE YOUR NAME AND PRESS ENTER TO CONFIRM", True, SILVER)
-        display_surface.blit(hint_txt, (WIDTH // 2 - hint_txt.get_width() // 2, 340))
+    # 3. FIGHT & ROUND STATES
+    elif game_state in ["round_intro", "fight", "round_over", "match_over", "paused"]:
+        keys = pygame.key.get_pressed()
 
-    # 3. LEVEL INTRO SPLASH
-    elif game_state == "level_intro":
-        intro_mask = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-        intro_mask.fill((10, 8, 16, 120))
-        display_surface.blit(intro_mask, (0, 0))
+        # Update Fighters during active fight
+        if game_state == "fight":
+            # Match Countdown Timer based on exact real elapsed time
+            if match_time_remaining > 0:
+                match_time_remaining = max(0.0, match_time_remaining - dt)
+                if match_time_remaining <= 0 and not time_over_handled:
+                    time_over_handled = True
+                    match_time_remaining = 0.0
+                    # Time Over Evaluation
+                    if p1.hp > p2.hp:
+                        p2.hp = 0
+                        p2.state = "defeated"
+                        p2.state_timer = 45
+                        game_state = "round_over"
+                        intro_timer = 110
+                        p1.rounds_won += 1
+                        speak_announcer_async(f"TIME OVER! {p1.name} wins on health!")
+                    elif p2.hp > p1.hp:
+                        p1.hp = 0
+                        p1.state = "defeated"
+                        p1.state_timer = 45
+                        game_state = "round_over"
+                        intro_timer = 110
+                        p2.rounds_won += 1
+                        speak_announcer_async(f"TIME OVER! {p2.name} wins on health!")
+                    else:
+                        p1.hp = 0
+                        p2.hp = 0
+                        p1.state = "defeated"
+                        p2.state = "defeated"
+                        p1.state_timer = 45
+                        p2.state_timer = 45
+                        game_state = "round_over"
+                        intro_timer = 110
+                        speak_announcer_async("TIME OVER! DRAW ROUND!")
 
-        vs_title = font_splash.render(f"{p1.name}   VS   {p2.name}", True, GOLD)
-        fight_txt = font_main.render("LET THE FIGHT BEGIN!", True, WHITE)
-        
-        display_surface.blit(vs_title, (WIDTH // 2 - vs_title.get_width() // 2, HEIGHT // 2 - 50))
-        display_surface.blit(fight_txt, (WIDTH // 2 - fight_txt.get_width() // 2, HEIGHT // 2 + 20))
-        
-        intro_timer -= 1
-        if intro_timer <= 0:
-            game_state = "fight"
+            # Fighter Physics & Updates
+            if p1.state != "defeated":
+                p1.update(keys, p2)
+            else:
+                p1.state_timer = max(0, p1.state_timer - 1)
 
-    # 4. GAMEPLAY & HUD
-    elif game_state in ["fight", "paused"]:
-        if game_state == "fight" and not game_over:
-            keys = pygame.key.get_pressed()
+            if p2.state != "defeated":
+                p2.update(keys, p1)
+            else:
+                p2.state_timer = max(0, p2.state_timer - 1)
 
-            if p1.state != "defeated": p1.update(keys, p2)
-            else: p1.state_timer = max(0, p1.state_timer - 1)
+            # Resolve Body Push-Box Collision (Prevents Passing Through)
+            resolve_fighter_body_collision(p1, p2)
 
-            if p2.state != "defeated": p2.update(keys, p1)
-            else: p2.state_timer = max(0, p2.state_timer - 1)
+            # Process Combat Hits & Collisions
+            shk1, evt1 = process_combat(p1, p2, particles, hit_flashes)
+            shk2, evt2 = process_combat(p2, p1, particles, hit_flashes)
+            if shk1 > camera_shake: camera_shake = shk1
+            if shk2 > camera_shake: camera_shake = shk2
 
-            process_combat_collisions(p1, p2)
-            process_combat_collisions(p2, p1)
-
+            # Check Knockout / Round End
             if p1.hp <= 0 and p1.state != "defeated":
                 p1.hp = 0
                 p1.state = "defeated"
-                p1.state_timer = 45 
-                p1.vx = -4 
+                p1.state_timer = 45
+                game_state = "round_over"
+                intro_timer = 110
+                p2.rounds_won += 1
+                speak_announcer_async(f"K.O.! {p2.name} wins the round!")
+
             elif p2.hp <= 0 and p2.state != "defeated":
                 p2.hp = 0
                 p2.state = "defeated"
                 p2.state_timer = 45
-                p2.vx = 4
+                game_state = "round_over"
+                intro_timer = 110
+                p1.rounds_won += 1
+                speak_announcer_async(f"K.O.! {p1.name} wins the round!")
 
-            # GAME OVER TRIGGER WITH ANNOUNCER VICTORY VOICE
-            if p1.state == "defeated" and p1.state_timer == 0:
-                game_over = True
-                winner_text = f"{p2.name} VICTORIOUS! DOMINATOR MATCH COMPLETE"
-                pygame.mixer.music.set_volume(0.1)
-                speak_text_async(f"{p2.name} wins the match! Dominator match completed!")
+        # Draw Fighters
+        p1.draw(render_surf)
+        p2.draw(render_surf)
 
-            elif p2.state == "defeated" and p2.state_timer == 0:
-                game_over = True
-                winner_text = f"{p1.name} VICTORIOUS! DOMINATOR MATCH COMPLETE"
-                pygame.mixer.music.set_volume(0.1)
-                speak_text_async(f"{p1.name} wins the match! Dominator match completed!")
+        # Particle System Updates & Render
+        for part in particles[:]:
+            part[0] += part[2]
+            part[1] += part[3]
+            part[3] += 0.35  # Particle gravity
+            part[5] -= 7     # Alpha fade
+            if part[5] <= 0:
+                particles.remove(part)
+            else:
+                p_surf = pygame.Surface((part[6] * 2, part[6] * 2), pygame.SRCALPHA)
+                pygame.draw.circle(p_surf, (*part[4], int(part[5])), (part[6], part[6]), part[6])
+                render_surf.blit(p_surf, (part[0] - part[6], part[1] - part[6]))
 
-        p1.draw(display_surface)
-        p2.draw(display_surface)
+        # Hit Flash Wave Effects
+        for flash in hit_flashes[:]:
+            flash[2] += 7
+            flash[3] -= 1
+            pygame.draw.circle(render_surf, (255, 255, 255, 120), (int(flash[0]), int(flash[1])), int(flash[2]), 2)
+            if flash[3] <= 0:
+                hit_flashes.remove(flash)
 
-        if game_state == "fight":
-            for part in particles[:]:
-                part[0] += part[2]
-                part[1] += part[3]
-                part[3] += 0.4
-                part[5] -= 6
-                if part[5] <= 0: 
-                    particles.remove(part)
+        # Render Top HUD
+        draw_tekken_hud(render_surf)
+
+        # Round Intro Banner
+        if game_state == "round_intro":
+            mask = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+            mask.fill((10, 8, 18, 140))
+            render_surf.blit(mask, (0, 0))
+
+            b_surf = font_banner.render(round_banner_text, True, GOLD)
+            f_surf = font_hud.render("READY... FIGHT!", True, WHITE)
+            render_surf.blit(b_surf, (WIDTH // 2 - b_surf.get_width() // 2, HEIGHT // 2 - 50))
+            render_surf.blit(f_surf, (WIDTH // 2 - f_surf.get_width() // 2, HEIGHT // 2 + 18))
+
+            intro_timer -= 1
+            if intro_timer <= 0:
+                game_state = "fight"
+
+        # Round Over Banner
+        elif game_state == "round_over":
+            ko_surf = font_title.render("K. O. !", True, RED_DAMAGE)
+            render_surf.blit(ko_surf, (WIDTH // 2 - ko_surf.get_width() // 2, HEIGHT // 2 - 60))
+
+            intro_timer -= 1
+            if intro_timer <= 0:
+                # Check for overall match champion (First to 2 wins)
+                if p1.rounds_won >= 2:
+                    game_state = "match_over"
+                    match_winner = p1
+                    speak_announcer_async(f"{p1.name} is the ULTIMATE BRAWL CHAMPION! Dominator match complete!")
+                elif p2.rounds_won >= 2:
+                    game_state = "match_over"
+                    match_winner = p2
+                    speak_announcer_async(f"{p2.name} is the ULTIMATE BRAWL CHAMPION! Dominator match complete!")
                 else:
-                    p_surf = pygame.Surface((part[6] * 2, part[6] * 2), pygame.SRCALPHA)
-                    pygame.draw.circle(p_surf, (*part[4], part[5]), (part[6], part[6]), part[6])
-                    display_surface.blit(p_surf, (part[0] - part[6], part[1] - part[6]))
+                    start_round(round_num + 1)
 
-            for flash in hit_flashes[:]:
-                flash[2] += 6
-                flash[3] -= 1
-                pygame.draw.circle(display_surface, (255, 255, 255, 100), (flash[0], flash[1]), flash[2], 2)
-                if flash[3] <= 0: 
-                    hit_flashes.remove(flash)
+        # Match Over (Tournament Winner Screen)
+        elif game_state == "match_over":
+            mask = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+            mask.fill((10, 8, 18, 210))
+            render_surf.blit(mask, (0, 0))
 
-        # Player 1 HUD
-        bar_x1, bar_y, bar_w, bar_h = 40, 30, 340, 26
-        
-        pygame.draw.rect(display_surface, (0, 100, 140), (bar_x1 - 4, bar_y - 4, bar_w + 8, bar_h + 8), border_radius=6)
-        pygame.draw.rect(display_surface, NEON_CYAN, (bar_x1 - 2, bar_y - 2, bar_w + 4, bar_h + 4), 2, border_radius=5)
-        pygame.draw.rect(display_surface, BLACK, (bar_x1, bar_y, bar_w, bar_h), border_radius=4)
-        
-        if p1.display_hp > 0: 
-            pygame.draw.rect(display_surface, (255, 255, 255), (bar_x1, bar_y, int(bar_w * (p1.display_hp / 100)), bar_h), border_radius=4)
-        if p1.hp > 0:
-            pygame.draw.rect(display_surface, NEON_CYAN, (bar_x1, bar_y, int(bar_w * (p1.hp / 100)), bar_h), border_radius=4)
-        
-        pygame.draw.line(display_surface, (200, 255, 255), (bar_x1, bar_y + 2), (bar_x1 + bar_w, bar_y + 2), 1)
+            win_title = font_banner.render(f"{match_winner.name} VICTORIOUS!", True, GOLD)
+            champ_sub = font_hud.render("TOURNAMENT CHAMPIONSHIP COMPLETE", True, WHITE)
+            res_hint = font_sub.render("PRESS [R] FOR REMATCH  |  PRESS [Q] FOR MAIN MENU", True, SILVER)
 
-        p1_name_surf = font_main.render(p1.name, True, WHITE)
-        display_surface.blit(p1_name_surf, (bar_x1, bar_y + 32))
-        pygame.draw.rect(display_surface, NEON_CYAN, (bar_x1, bar_y + 60, p1_name_surf.get_width(), 3))
-        
-        cd_w_1 = int(70 * (p1.dash_cooldown / 50))
-        if cd_w_1 > 0: pygame.draw.rect(display_surface, GOLD, (bar_x1, bar_y + 68, cd_w_1, 4))
-
-        # Player 2 HUD
-        bar_x2 = WIDTH - 380
-        
-        pygame.draw.rect(display_surface, (140, 0, 70), (bar_x2 - 4, bar_y - 4, bar_w + 8, bar_h + 8), border_radius=6)
-        pygame.draw.rect(display_surface, NEON_MAGENTA, (bar_x2 - 2, bar_y - 2, bar_w + 4, bar_h + 4), 2, border_radius=5)
-        pygame.draw.rect(display_surface, BLACK, (bar_x2, bar_y, bar_w, bar_h), border_radius=4)
-        
-        if p2.display_hp > 0: 
-            pygame.draw.rect(display_surface, (255, 255, 255), (bar_x2, bar_y, int(bar_w * (p2.display_hp / 100)), bar_h), border_radius=4)
-        if p2.hp > 0:
-            pygame.draw.rect(display_surface, NEON_MAGENTA, (bar_x2, bar_y, int(bar_w * (p2.hp / 100)), bar_h), border_radius=4)
-
-        pygame.draw.line(display_surface, (255, 200, 230), (bar_x2, bar_y + 2), (bar_x2 + bar_w, bar_y + 2), 1)
-
-        p2_name_surf = font_main.render(p2.name, True, WHITE)
-        display_surface.blit(p2_name_surf, (bar_x2 + bar_w - p2_name_surf.get_width(), bar_y + 32))
-        pygame.draw.rect(display_surface, NEON_MAGENTA, (bar_x2 + bar_w - p2_name_surf.get_width(), bar_y + 60, p2_name_surf.get_width(), 3))
-
-        cd_w_2 = int(70 * (p2.dash_cooldown / 50))
-        if cd_w_2 > 0: pygame.draw.rect(display_surface, GOLD, (bar_x2 + bar_w - cd_w_2, bar_y + 68, cd_w_2, 4))
-
-        # Center VS Badge
-        vs_obj = font_main.render("VS", True, GOLD)
-        display_surface.blit(vs_obj, (WIDTH // 2 - vs_obj.get_width() // 2, 28))
+            render_surf.blit(win_title, (WIDTH // 2 - win_title.get_width() // 2, HEIGHT // 2 - 60))
+            render_surf.blit(champ_sub, (WIDTH // 2 - champ_sub.get_width() // 2, HEIGHT // 2 + 10))
+            render_surf.blit(res_hint, (WIDTH // 2 - res_hint.get_width() // 2, HEIGHT // 2 + 65))
 
         # Pause Menu Overlay
-        if game_state == "paused":
-            pause_mask = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-            pause_mask.fill((10, 8, 16, 200))
-            display_surface.blit(pause_mask, (0, 0))
+        elif game_state == "paused":
+            mask = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+            mask.fill((10, 8, 18, 200))
+            render_surf.blit(mask, (0, 0))
 
-            p_title = font_splash.render("GAME PAUSED", True, WHITE)
-            display_surface.blit(p_title, (WIDTH // 2 - p_title.get_width() // 2, HEIGHT // 2 - 130))
+            p_title = font_banner.render("GAME PAUSED", True, WHITE)
+            render_surf.blit(p_title, (WIDTH // 2 - p_title.get_width() // 2, HEIGHT // 2 - 130))
 
+            # Resume Button
             h1 = resume_btn.collidepoint(mouse_pos)
-            pygame.draw.rect(display_surface, GOLD if h1 else GLASS_OVERLAY, resume_btn, border_radius=4)
-            pygame.draw.rect(display_surface, WHITE if h1 else GOLD, resume_btn, 1, border_radius=4)
+            pygame.draw.rect(render_surf, (0, 240, 120, 40) if h1 else DARK_PANEL, resume_btn, border_radius=4)
+            pygame.draw.rect(render_surf, OGRE_GREEN if h1 else GOLD, resume_btn, 1, border_radius=4)
             t1 = font_sub.render("RESUME COMBAT", True, WHITE)
-            display_surface.blit(t1, (resume_btn.x + (resume_btn.width // 2 - t1.get_width() // 2), resume_btn.y + (resume_btn.height // 2 - t1.get_height() // 2)))
+            render_surf.blit(t1, (resume_btn.x + resume_btn.width // 2 - t1.get_width() // 2, resume_btn.y + 11))
 
+            # Restart Button
             h2 = restart_btn.collidepoint(mouse_pos)
-            pygame.draw.rect(display_surface, GOLD if h2 else GLASS_OVERLAY, restart_btn, border_radius=4)
-            pygame.draw.rect(display_surface, WHITE if h2 else GOLD, restart_btn, 1, border_radius=4)
+            pygame.draw.rect(render_surf, (255, 40, 140, 40) if h2 else DARK_PANEL, restart_btn, border_radius=4)
+            pygame.draw.rect(render_surf, PRINCESS_PINK if h2 else GOLD, restart_btn, 1, border_radius=4)
             t2 = font_sub.render("RESTART MATCH", True, WHITE)
-            display_surface.blit(t2, (restart_btn.x + (restart_btn.width // 2 - t2.get_width() // 2), restart_btn.y + (restart_btn.height // 2 - t2.get_height() // 2)))
+            render_surf.blit(t2, (restart_btn.x + restart_btn.width // 2 - t2.get_width() // 2, restart_btn.y + 11))
 
+            # Lobby Button
             h3 = home_btn.collidepoint(mouse_pos)
-            pygame.draw.rect(display_surface, GOLD if h3 else GLASS_OVERLAY, home_btn, border_radius=4)
-            pygame.draw.rect(display_surface, WHITE if h3 else GOLD, home_btn, 1, border_radius=4)
+            pygame.draw.rect(render_surf, DARK_PANEL, home_btn, border_radius=4)
+            pygame.draw.rect(render_surf, WHITE if h3 else GOLD, home_btn, 1, border_radius=4)
             t3 = font_sub.render("RETURN TO MAIN LOBBY", True, WHITE)
-            display_surface.blit(t3, (home_btn.x + (home_btn.width // 2 - t3.get_width() // 2), home_btn.y + (home_btn.height // 2 - t3.get_height() // 2)))
+            render_surf.blit(t3, (home_btn.x + home_btn.width // 2 - t3.get_width() // 2, home_btn.y + 11))
 
-    # 5. GAME OVER OVERLAY
-    if game_over:
-        overlay = pygame.Surface((WIDTH, HEIGHT))
-        overlay.fill(BLACK)
-        overlay.set_alpha(210)
-        display_surface.blit(overlay, (0, 0))
-
-        win_obj = font_main.render(winner_text, True, GOLD)
-        res_obj = font_sub.render("PRESS 'R' TO REMATCH BATTLE  |  PRESS 'Q' TO QUIT TO MAIN LOBBY SCREEN", True, SILVER)
-        
-        display_surface.blit(win_obj, (WIDTH // 2 - win_obj.get_width() // 2, HEIGHT // 2 - 35))
-        display_surface.blit(res_obj, (WIDTH // 2 - res_obj.get_width() // 2, HEIGHT // 2 + 15))
-
-    screen.blit(display_surface, (render_offset_x, render_offset_y))
+    # Blit Final Render Surface with Camera Shake to Screen
+    screen.blit(render_surf, (shake_x, shake_y))
     pygame.display.flip()
+
+# Cleanup
+pygame.quit()
+sys.exit()
