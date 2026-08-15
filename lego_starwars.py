@@ -61,6 +61,26 @@ except Exception as e:
 # Voice options: "en-US-ChristopherNeural" (Deep Announcer), "en-US-GuyNeural", "en-US-EricNeural"
 VOICE = "en-US-ChristopherNeural"
 
+def trigger_announcer(text):
+    """
+    Generates dynamic TTS audio in a separate thread so the Pygame loop
+    does not freeze. Plays the audio as soon as it's ready.
+    """
+    def run_async_tts():
+        async def fetch_and_play():
+            filename = "announcer_temp.mp3"
+            # Generate audio stream from edge-tts
+            communicate = edge_tts.Communicate(text, "en-US-ChristopherNeural")
+            await communicate.save(filename)
+            
+            # Play generated sound on Pygame's audio channel
+            pygame.mixer.Sound(filename).play()
+
+        asyncio.run(fetch_and_play())
+
+    # Daemon thread ensures the thread exits when the main game closes
+    threading.Thread(target=run_async_tts, daemon=True).start()
+
 def speak_text_async(text, channel_id=1):
     """Fires edge-tts synthesis in a non-blocking background thread."""
     threading.Thread(target=_generate_and_play, args=(text, channel_id), daemon=True).start()
@@ -578,13 +598,13 @@ while True:
                 game_over = True
                 winner_text = f"{p2.name} VICTORIOUS! DOMINATOR MATCH COMPLETE"
                 pygame.mixer.music.set_volume(0.1)
-                speak_text_async(f"{p2.name} wins the match! Dominator victory!")
+                speak_text_async(f"{p2.name} wins the match! Dominator match completed!")
 
             elif p2.state == "defeated" and p2.state_timer == 0:
                 game_over = True
                 winner_text = f"{p1.name} VICTORIOUS! DOMINATOR MATCH COMPLETE"
                 pygame.mixer.music.set_volume(0.1)
-                speak_text_async(f"{p1.name} wins the match! Dominator victory!")
+                speak_text_async(f"{p1.name} wins the match! Dominator match completed!")
 
         p1.draw(display_surface)
         p2.draw(display_surface)
