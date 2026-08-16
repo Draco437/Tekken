@@ -921,7 +921,7 @@ while running:
                 if game_state in ["fight", "round_intro", "round_over"]:
                     previous_state = game_state
                     game_state = "paused"
-                    pygame.mixer.music.pause()
+                    pygame.mixer.music.unpause()
                 elif game_state == "paused":
                     game_state = previous_state
                     pygame.mixer.music.unpause()
