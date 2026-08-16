@@ -48,7 +48,7 @@ font_banner = pygame.font.SysFont("Impact", 54)
 font_combo = pygame.font.SysFont("Impact", 28)
 
 GRAVITY = 0.85
-FLOOR_Y = HEIGHT - 68
+FLOOR_Y = HEIGHT - 130
 FRICTION = 0.80
 
 # Audio Temp Directory Setup
@@ -68,8 +68,8 @@ for bg_filename in ["Back.png", "background.png", "background.jpg"]:
 
 # Load Background Music
 try:
-    if os.path.exists("sounds/bg_music.mp3"):
-        pygame.mixer.music.load("sounds/bg_music.mp3")
+    if os.path.exists("sounds/bg_music_new.mp3"):
+        pygame.mixer.music.load("sounds/bg_music_new.mp3")
         pygame.mixer.music.set_volume(0.35)
         pygame.mixer.music.play(-1)
 except Exception as e:
